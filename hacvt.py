@@ -4,7 +4,7 @@ from jsonpath_ng.ext import parse
 import os
 from rdflib import Literal, Graph, URIRef
 from rdflib.namespace import Namespace, RDF, RDFS, OWL
-import requests
+import requests_cache
 import sys
 import yaml
 
@@ -18,12 +18,14 @@ def mkname(name):
 
 
 # In config: hass_url = "http://dehvl.local:8123/api/template"
-rest_headers = {'Content-type': 'application/json', 'Authorization': 'Bearer ' + config.hass_token}
+
+session = requests_cache.CachedSession('my_cache')
+session.headers = {'Content-type': 'application/json', 'Authorization': 'Bearer ' + config.hass_token}
 
 
 def getYAML(query):
     http_data = {'template': '{{ '+query+' }}'}
-    j_response = requests.post(config.hass_url, json=http_data, headers=rest_headers)
+    j_response = session.post(config.hass_url, json=http_data)
     if j_response.status_code == 200:
         return yaml.safe_load(j_response.text)
     else:
@@ -75,9 +77,9 @@ def main():
         name = getDeviceAttr(d, 'name')
         model = getDeviceAttr(d, 'model')
         name_by_user = getDeviceAttr(d, 'name_by_user')
+        # O'sama denn hier? TODO.
         entry_type = getDeviceAttr(d, 'entry_type')
         if not entry_type == "None":
-            # O'sama denn hier? TODO.
             eprint(f"INFO: Found {d} {name} as: {entry_type}")
 
         d_g = URIRef("http://my.name.spc/" + mkname(name if name_by_user == "None" else name_by_user))
@@ -89,7 +91,7 @@ def main():
         # TODO: Entities can override this individually.
         d_area = getYAML(f'area_id("{d}")')
         if not d_area == "None":  # Careful, string!
-            area = URIRef("http://my.name.spc/ares/" + mkname(d_area))
+            area = URIRef("http://my.name.spc/areas/" + mkname(d_area))
             g.add((area, RDF.type, S4BLDG['BuildingSpace']))
             g.add((area, S4BLDG['contains'], d_g))
         # END Area
