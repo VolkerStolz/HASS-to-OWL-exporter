@@ -82,7 +82,7 @@ def main():
         if not entry_type == "None":
             eprint(f"INFO: Found {d} {name} as: {entry_type}")
 
-        d_g = URIRef("http://my.name.spc/" + mkname(name if name_by_user == "None" else name_by_user))
+        d_g = MINE[mkname(name if name_by_user == "None" else name_by_user)]
         g.add((d_g, RDF.type, SAREF['Device']))
         g.add((d_g, SAREF['hasManufacturer'], Literal(manufacturer)))
         g.add((d_g, SAREF['hasModel'], Literal(model)))
