@@ -1,10 +1,12 @@
+import config
 import json
 from jsonpath_ng.ext import parse
 import os
 from rdflib import Literal, Graph, URIRef
-from rdflib.namespace import Namespace, RDF, OWL
-from urllib.parse import quote
+from rdflib.namespace import Namespace, RDF, RDFS, OWL
+import requests
 import sys
+import yaml
 
 
 def eprint(*args, **kwargs):
@@ -15,93 +17,191 @@ def mkname(name):
     return name.replace(" ", "_").replace("/", "_")
 
 
-def getNameOrOrig(thing):
-    if e['name'] is not None:
-        return e['name']
+# In config: hass_url = "http://dehvl.local:8123/api/template"
+rest_headers = {'Content-type': 'application/json', 'Authorization': 'Bearer ' + config.hass_token}
+
+
+def getYAML(query):
+    http_data = {'template': '{{ '+query+' }}'}
+    j_response = requests.post(config.hass_url, json=http_data, headers=rest_headers)
+    if j_response.status_code == 200:
+        return yaml.safe_load(j_response.text)
     else:
-        return e['original_name']
+        eprint(f"JSON request failed: " + str(j_response.text))
+        exit(1)
 
 
-f_d = open(os.path.expanduser("~/tmp/core.device_registry"))
-f_e = open(os.path.expanduser("~/tmp/core.entity_registry"))
+def getDevices():
+    return getYAML('states | map(attribute="entity_id")|map("device_id") | unique | reject("eq",None) | list')
 
-j_d = json.load(f_d)
-j_e = json.load(f_e)
 
-my_devs = {}
-my_ents = {}
+def getDeviceEntities(device):
+    return getYAML('device_entities("'+device+'")')
+
+
+def getDeviceAttr(device, attr):
+    return getYAML('device_attr("'+device+'","'+attr+'")')
+
+
+def getStateAttr(e, attr):
+    return getYAML(f'state_attr("{e}", "{attr}")')
+
 
 # TODOs
 # - escape "/" in names!
 
-for e in j_e['data']['entities']:
-    e_id = e['entity_id']
-    e_did = e['device_id']
-    # let's create the owning device:
-    if e_did is not None:
-        jpath = parse('$.data.devices[?id=="' + e_did + '"]')
-        jmatch = [match.value for match in jpath.find(j_d)]
-        if len(jmatch) != 1:
-            raise "That didn't work for:" + e_did
-        d = jmatch[0]
-        idx = e_did
-    else:
-        idx = e['id']
-        d = {}  # XXX! Hack.
-        # We expect devices to have a name later on. Quite a chain of fallbacks here:
-        if e['name'] is not None:
-            d['name'] = e['name']
+def main():
+    g, MINE, SAREF, S4BLDG = setupSAREF()
+    class_to_saref = {
+        "climate": SAREF["HVAC"]
+        , "button": SAREF["Actuator"]
+        , "sensor": SAREF["Sensor"]
+        , "binary_sensor": SAREF["Sensor"]
+        , "light": SAREF["Appliance"]
+        , "switch": SAREF["Switch"]
+        , "device_tracker": SAREF["Sensor"]
+        , "device": SAREF["Device"]  # of course...
+        # We skip those for now -- are these maybe also just Sensors?
+        , "select": None
+        , "number": None
+    }
+
+    for d in getDevices():
+        # https://github.com/home-assistant/core/blob/dev/homeassistant/helpers/device_registry.py
+        # TODO: table-based conversion, manufacturer -> hasManufacturer,
+        #  maybe with lambdas for transformation?
+        # TODO: Can we do this in a single HTTP-request/Jinja-template?
+        manufacturer = getDeviceAttr(d, 'manufacturer')
+        name = getDeviceAttr(d, 'name')
+        model = getDeviceAttr(d, 'model')
+        name_by_user = getDeviceAttr(d, 'name_by_user')
+        entry_type = getDeviceAttr(d, 'entry_type')
+        if not entry_type == "None":
+            # O'sama denn hier? TODO.
+            eprint(f"INFO: Found {d} {name} as: {entry_type}")
+
+        d_g = URIRef("http://my.name.spc/" + mkname(name if name_by_user == "None" else name_by_user))
+        g.add((d_g, RDF.type, SAREF['Device']))
+        g.add((d_g, SAREF['hasManufacturer'], Literal(manufacturer)))
+        g.add((d_g, SAREF['hasModel'], Literal(model)))
+
+        # Handle 'Area' of devices. May be None.
+        # TODO: Entities can override this individually.
+        d_area = getYAML(f'area_id("{d}")')
+        if not d_area == "None":  # Careful, string!
+            area = URIRef("http://my.name.spc/ares/" + mkname(d_area))
+            g.add((area, RDF.type, S4BLDG['BuildingSpace']))
+            g.add((area, S4BLDG['contains'], d_g))
+        # END Area
+
+        es = getDeviceEntities(d)
+
+        if len(es) == 0:
+            eprint(f"WARN: Device {name} does not have any entities?!")
+        elif len(es) == 1:
+            # Only one device, let's special-case
+            eprint(f"WARN: Device {name} does only have a single entity {es[0]}.")
+            continue  # TODO
         else:
-            d['name'] = e['original_name']
-        if d['name'] is None:
-            d['name'] = e['entity_id']
-        assert d['name'] is not None, str(e)
-    if not idx in my_devs:
-        my_devs[idx] = d
-        # plural names:
-        my_devs[idx]['sensors'] = []
-        my_devs[idx]['switches'] = []
-        my_devs[idx]['hvacs'] = []
-        eprint("Added " + str(idx))
-    # ...and then directly add each sensor or switch:
-    if e_id.startswith("sensor.") or e_id.startswith("binary_sensor."):
-        my_devs[idx]['sensors'].append(e)
-    elif e_id.startswith("switch."):
-        my_devs[idx]['switches'].append(e)
-    elif e_id.startswith("climate."):
-        # In my case device_id is null!
-        # I guess we add it as a device then...
-        # TODO: probably should do this in general?
+            # Create sub-devices
+            for e in es:
+                print(f"Handling {e}:")
+                # Now let's find out the class:
+                assert e.count('.') == 1
+                (domain, e_name) = e.split('.')
+                # e_friendly_name = getYAML(f'state_attr("{e}", "friendly_name")')
+                e_d = URIRef("http://my.name.spc/" + mkname(e_name))
+                if domain not in class_to_saref:
+                    c = SAREF['Device']
+                else:
+                    c = class_to_saref[domain]
+                    if c == SAREF['Sensor']:  # XXX?
+                        # Special-casing (business rule):
+                        device_class = getStateAttr(e, "device_class")
+                        if device_class == "temperature":
+                            c = SAREF["TemperatureSensor"]
+                        elif device_class == "humidity":
+                            c = MINE['HumiditySensor']
+                        # END
+                if c is None:
+                    eprint(f"WARN: Skipping {e} (no domain).")
+                else:
+                    # https://github.com/home-assistant/core/blob/dev/homeassistant/helpers/entity_registry.py
 
-        my_devs[idx]['hvacs'].append(e)
-    else:
-        eprint(f"Skipping device {e_id}.\n")
-        continue
+                    g.add((e_d, RDF.type, c))
+                    g.add((d_g, SAREF['consistsOf'], e_d))
 
-g = Graph(bind_namespaces="core")
-SAREF = Namespace("https://saref.etsi.org/core/")
-g.bind("saref", SAREF)
-g.bind("owl", OWL)
-saref_import = URIRef("http://my.name.spc")
-g.add((saref_import, RDF.type, OWL.Ontology))
-g.add((saref_import, OWL.imports, URIRef(str(SAREF))))
+                    if domain == "switch":
+                        e_function = URIRef("http://my.name.spc/function/" + mkname(e_name))  # TODO: name?
+                        g.add((e_function, RDF.type, SAREF['OnOffFunction']))
+                        g.add((e_d, SAREF['hasFunction'], e_function))
+                    elif domain == "climate":
+                        # Business rule: https://github.com/home-assistant/core/blob/dev/homeassistant/components/climate/__init__.py#L214
+                        # Are we delivering temperature readings, e.g. an HVAC?
+                        q = getStateAttr(e, "current_temperature")
+                        if q != "None":
+                            g.add((e_d, RDF.type, SAREF['TemperatureSensor']))
+                        q = getStateAttr(e, "current_humidity")
+                        if q != "None":
+                            g.add((e_d, RDF.type, MINE['HumiditySensor']))
+                        # END
+                    elif domain == "binary_sensor" or domain == "sensor":  # Handle both types in one for now.
+                        # https://github.com/home-assistant/core/blob/dev/homeassistant/components/binary_sensor/__init__.py
+                        q = getStateAttr(e, 'device_class')
+                        if q != "None":
+                            # Patch lower-case names:
+                            q = q.title()
+                            # TODO: We want to create new types in our namespace, but somehow the check doesn't work.
+                            # Check with Eduard.
+                            if q not in SAREF:  # XXX Not working.
+                                eprint(f"INFO: Creating {q}.")
+                                q_o = MINE[q]
+                                # Create Property...
+                                g.add((q_o, RDFS.subClassOf, SAREF['Property']))
+                                # ...and instance:
+                            else:
+                                q_o = SAREF[q]
+                            q_prop = MINE[f"{q}_prop"]
+                            g.add((q_prop, RDF.type, q_o))
+                            g.add((e_d, SAREF['measuresProperty'], q_prop))
 
-# print(str(my_devs))
+
+    f_out = open("/Users/vs/ha.ttl", "w")
+    print(g.serialize(format='turtle'), file=f_out)
+    print(g.serialize(format='turtle'))
+    exit(0)
+
+
+def setupSAREF():
+    g = Graph(bind_namespaces="core")
+    SAREF = Namespace("https://saref.etsi.org/core/")
+    S4BLDG = Namespace("https://saref.etsi.org/saref4bldg/")
+    MINE = Namespace("http://my.name.spc/")
+    g.bind("saref", SAREF)
+    g.bind("owl", OWL)
+    g.bind("s4bldg", S4BLDG)
+    g.bind("mine", MINE)
+    saref_import = URIRef("http://my.name.spc/")  # Check!
+    g.add((saref_import, RDF.type, OWL.Ontology))
+    g.add((saref_import, OWL.imports, URIRef(str(SAREF))))
+    g.add((saref_import, OWL.imports, URIRef(str(S4BLDG))))
+
+    # Let's patch SAREF a bit with our extensions:
+    g.add((MINE['HumiditySensor'], RDFS.subClassOf, SAREF['Sensor']))
+    # END
+
+    return g, MINE, SAREF, S4BLDG
+
+
+if __name__ == "__main__":
+    main()
+
+exit(1)
 
 for (id, d) in my_devs.items():
-    # TODO: why _g...?
     d_g = URIRef("http://my.name.spc/" + mkname(d['name']))
     d_cl = "Device"  # to be overriden below
-    if 'manufacturer' in d:
-        g.add((d_g, SAREF['hasManufacturer'], Literal(d['manufacturer'])))
-    # TODO: use some kind of lookup-table
     cl = "Switch"
-    for s in d['switches']:
-        e_g = URIRef("http://my.name.spc/" + mkname(s['name']))
-        g.add((e_g, RDF.type, SAREF['OnOffFunction']))
-        g.add((d_g, SAREF['hasFunction'], e_g))
-    if len(d['switches']) > 0:
-        g.add((d_g, RDF.type, SAREF[cl]))
 
     # Only assign one class? [TODO]
     d_cl = "Sensor"
@@ -146,23 +246,3 @@ for (id, d) in my_devs.items():
             g.add((e_m, SAREF['isMeasuredIn'], unit))
         g.add((d_g, SAREF['measuresProperty'], e_prop))
         g.add((e_m, SAREF['relatesToProperty'], e_prop))  # inverse inferred in Protégé
-    # At least one sensor?
-    if len(d['sensors']) > 0:
-        g.add((d_g, RDF.type, SAREF["Sensor"]))
-
-    # treat those special for now
-    for s in d['hvacs']:
-        e_name = s['name']
-        # TODO: same safetynet for switches?
-        if e_name is None:
-            e_name = s['original_name']
-            e_m = URIRef("http://my.name.spc/" + mkname(e_name) + "_" + s['id'][0:3])
-        g.add((e_m, RDF.type, SAREF['HVAC']))
-
-    # create appropriate class (see XXX above!)
-    # Should probably be list of classes, or let `g.add()` handle redundant decls?
-    g.add((d_g, RDF.type, SAREF[d_cl]))
-
-f_out = open("/Users/vs/ha.ttl","w")
-print(g.serialize(format='turtle'), file=f_out)
-
