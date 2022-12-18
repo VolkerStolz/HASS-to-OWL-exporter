@@ -1,4 +1,5 @@
 import config
+from functools import cache
 from rdflib import Literal, Graph, URIRef
 from rdflib.namespace import Namespace, RDF, RDFS, OWL
 import requests_cache
@@ -180,6 +181,7 @@ def main():
                         if q != "None":
                             brightness_prop = MINE['Brightness_prop']
                             g.add((brightness_prop, RDF.type, HASS['Brightness']))
+                            # TODO: XXX Nope, we're not measuring, we're setting!
                             g.add((e_d, SAREF['measuresProperty'], brightness_prop))
 
 
@@ -189,14 +191,13 @@ def main():
     exit(0)
 
 
+@cache
 def hasEntity(master, SAREF, q):
-    # TODO: Inefficient
-    q_o = None
+    # TODO: At least we're caching now...but we could precompute a dictionary.
     for s, _, _ in master.triples((None, RDFS.subClassOf, SAREF['Property'])):
         if s.endswith("/" + q):
-            q_o = SAREF[q]
-            break
-    return q_o
+            return SAREF[q]
+    return None
 
 
 def setupSAREF():
