@@ -74,7 +74,8 @@ def main():
         # https://github.com/home-assistant/core/blob/dev/homeassistant/helpers/device_registry.py
         # TODO: table-based conversion, manufacturer -> hasManufacturer,
         #  maybe with lambdas for transformation?
-        # TODO: Can we do this in a single HTTP-request/Jinja-template?
+        # TODO: Can we do this in a single HTTP-request/Jinja-template? Looks like {{ states.domain.entity.attributes }}
+        #  should do the trick for `state_attr`.
         manufacturer = getDeviceAttr(d, 'manufacturer')
         name = getDeviceAttr(d, 'name')
         model = getDeviceAttr(d, 'model')
@@ -102,10 +103,10 @@ def main():
 
         if len(es) == 0:
             eprint(f"WARN: Device {name} does not have any entities?!")
-        elif len(es) == 1:
-            # Only one device, let's special-case
-            eprint(f"WARN: Device {name} does only have a single entity {es[0]}.")
-            continue  # TODO
+        # elif len(es) == 1:
+        #     # Only one device, let's special-case
+        #     eprint(f"WARN: Device {name} does only have a single entity {es[0]}.")
+        #     continue  # TODO
         else:
             # Create sub-devices
             for e in es:
@@ -114,7 +115,9 @@ def main():
                 assert e.count('.') == 1
                 (domain, e_name) = e.split('.')
 
-                # Let's ignore those as spam for now:
+                # Let's ignore those as spam for now.
+                # Note that we don't seem to see the underlying radio-properties RSSI, LQI
+                # that HA is hiding explicitly in the UI.
                 if e_name.endswith("_identify"):
                     continue
 
