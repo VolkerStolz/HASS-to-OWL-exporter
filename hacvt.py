@@ -9,6 +9,8 @@ import requests_cache
 import sys
 import yaml
 
+from homeassistant.const import SERVICE_TOGGLE
+
 
 def eprint(*args, **kwargs):
     print(*args, file=sys.stderr, **kwargs)
@@ -64,14 +66,15 @@ def getStateAttr(e, attr):
 # - escape "/" in names!
 
 def main():
-    g, MINE, HASS, SAREF, S4BLDG = setupSAREF()
+    Svcs, g, MINE, HASS, SAREF, S4BLDG = setupSAREF()
     # Load known types:
     master = Graph()
     master.parse("https://saref.etsi.org/core/v3.1.1/saref.ttl")
 
     class_to_saref = {
+        # https://github.com/home-assistant/core/blob/master/homeassistant/const.py
         "climate": SAREF["HVAC"]
-        , "button": SAREF["Actuator"]
+        , "button": HASS["Button"]
         , "sensor": SAREF["Sensor"]
         , "binary_sensor": SAREF["Sensor"]
         , "light": HASS["Light"]
@@ -79,8 +82,8 @@ def main():
         , "device_tracker": SAREF["Sensor"]
         , "device": SAREF["Device"]  # of course...
         # We skip those for now -- are these maybe also just Sensors?
-        , "select": None
-        , "number": None
+        , "select": None  # SERVICE_SELECT_OPTION
+        , "number": None  # SERVICE_SET_VALUE
     }
 
     for d in getDevices():
@@ -136,26 +139,10 @@ def main():
 
                 # Experimental section:
                 # e_friendly_name = getYAML(f'state_attr("{e}", "friendly_name")')
-                # Not directly YAML due to embedded serialized objects:
-                # - state_class
-                # - 'hvac_modes': [<HVACMode.OFF: 'off'>,
-                # - 'system_mode': '[<SystemMode.Heat: 4>]/heat'   <----- Quoted! Messes with regex a bit.
-                #   https://github.com/home-assistant/core/blob/master/homeassistant/components/zha/climate.py#L166
-                # - <Occupancy.Occupied: 1>
-                #
-                if False:
-                    attrs = getTextQuery(f'states.{e}.attributes')
-                    print(attrs)
-                    pat_re = compileMogrifier()  # Cacheable...does it help?
-                    a2 = attrs
-                    state_class_s = pat_re.search(a2)
-                    while state_class_s is not None:
-                        a2 = state_class_s.group(1).join([a2[:state_class_s.start()], a2[state_class_s.end():]])
-                        state_class_s = pat_re.search(a2)
-                    ja = yaml.safe_load(a2)
-                    print(ja)
                 # END
 
+                attrs = getAttributes(e)
+                device_class = attrs['device_class'] if 'device_class' in attrs else None
                 e_d = MINE[mkname(e_name)]
                 if domain not in class_to_saref:
                     c = SAREF['Device']
@@ -163,13 +150,19 @@ def main():
                     c = class_to_saref[domain]
                     if c == SAREF['Sensor']:  # XXX?
                         # Special-casing (business rule):
-                        device_class = getStateAttr(e, "device_class")
                         if device_class == "temperature":
                             c = SAREF["TemperatureSensor"]
+                            assert attrs['state_class'] == "SensorStateClass.MEASUREMENT", attrs
                         elif device_class == "humidity":
                             c = HASS['HumiditySensor']
+                            assert attrs['state_class'] == "SensorStateClass.MEASUREMENT", attrs
+                        elif device_class == "energy":
+                            c = SAREF['Meter']
+                            assert attrs['state_class'] == "SensorStateClass.TOTAL_INCREASING", attrs
                         else:
-                            eprint(f"WARN: Not handling class {device_class} (yet).")
+                            # Spam:
+                            if device_class is not None:
+                                eprint(f"WARN: Not handling class {device_class} (yet).")
                         # END
                 if c is None:
                     eprint(f"WARN: Skipping {e} (no mapping for domain {domain}).")
@@ -181,25 +174,33 @@ def main():
 
                     # Let's be careful what is MINE and what is in HASS below.
                     if domain == "switch":
-                        e_function = MINE[mkname(e_name)]  # TODO: name?
-                        g.add((e_function, RDF.type, SAREF['OnOffFunction']))
-                        g.add((e_d, SAREF['hasFunction'], e_function))
+                        # e_function = MINE[mkname(e_name)+"_function"]  # TODO: name?
+                        # g.add((e_function, RDF.type, SAREF['OnOffFunction']))
+                        # g.add((e_d, SAREF['hasFunction'], e_function))
+                        # Tedious -- use Svcs-table?
+                        serviceOffer(HASS, MINE, SAREF, e_d, e_name, g, "_toggle", 'ServiceToggle')
+                        serviceOffer(HASS, MINE, SAREF, e_d, e_name, g, "_turnOn", 'ServiceTurnOn')
+                        serviceOffer(HASS, MINE, SAREF, e_d, e_name, g, "_turnOff", 'ServiceTurnOff')
+                    elif domain == "button":
+                        serviceOffer(HASS, MINE, SAREF, e_d, e_name, g, "_press", 'ServicePress')
                     elif domain == "climate":
+                        # TODO: get from Svcs-table
+                        serviceOffer(HASS, MINE, SAREF, e_d, e_name, g, "_turnOn", 'ServiceTurnOn')
+                        serviceOffer(HASS, MINE, SAREF, e_d, e_name, g, "_turnOff", 'ServiceTurnOff')
                         # Business rule: https://github.com/home-assistant/core/blob/dev/homeassistant/components/climate/__init__.py#L214
                         # Are we delivering temperature readings, e.g. an HVAC?
-                        q = getStateAttr(e, "current_temperature")
-                        if q != "None":
+                        q = attrs['current_temperature'] if 'current_temperature' in attrs else None
+                        if q is not None:
                             g.add((e_d, RDF.type, SAREF['TemperatureSensor']))
-                        q = getStateAttr(e, "current_humidity")
-                        if q != "None":
+                        q = attrs['current_humidity'] if 'current_humidity' in attrs else None
+                        if q is not None:
                             g.add((e_d, RDF.type, HASS['HumiditySensor']))
                         # END
                     elif domain == "binary_sensor" or domain == "sensor":  # Handle both types in one for now.
                         # https://github.com/home-assistant/core/blob/dev/homeassistant/components/binary_sensor/__init__.py
-                        q = getStateAttr(e, 'device_class')
-                        if q != "None":
+                        if device_class is not None:
                             # Patch lower-case names:
-                            q = q.title()
+                            q = device_class.title()
                             # Let's look it up in the SAREF "master-list":
                             q_o = hasEntity(master, SAREF, q)
                             if q_o is None:
@@ -211,21 +212,67 @@ def main():
                             q_prop = MINE[f"{q}_prop"]
                             g.add((q_prop, RDF.type, q_o))
                             g.add((e_d, SAREF['measuresProperty'], q_prop))
+                        #
+                        q = attrs['unit_of_measurement'] if 'unit_of_measurement' in attrs else None
+                        if q is not None:
+                            if device_class == "temperature":
+                                unit = SAREF['TemperatureUnit']
+                            elif device_class == "current":
+                                unit = SAREF['PowerUnit']
+                            elif device_class == "power":
+                                unit = SAREF['PowerUnit']
+                            elif device_class == "energy":
+                                unit = SAREF['EnergyUnit']
+                            elif device_class == "pressure":
+                                unit = SAREF['PressureUnit']
+                            else:  # Not built-in.
+                                if q == "mbar":  # WIP
+                                    assert False, device_class
+                                unit = HASS[mkname(q)]
+                                g.add((unit, RDFS.subClassOf, SAREF['UnitOfMeasure']))
+                            g.add((MINE[mkname(q)], RDF.type, unit))
                     elif domain == "light":
                         # brightness = 0 results in "None", silly, so we can't distinguish
                         # "off" from "doesn't exist"?
-                        q = getStateAttr(e, 'brightness')
-                        if q != "None":
+                        q = attrs['brightness'] if 'brightness' in attrs else None
+                        if q is not None:
                             brightness_prop = MINE['Brightness_prop']
                             g.add((brightness_prop, RDF.type, HASS['Brightness']))
-                            # TODO: XXX Nope, we're not measuring, we're setting!
+                            # TODO: XXX Nope, we're not measuring, we're setting!?
                             g.add((e_d, SAREF['measuresProperty'], brightness_prop))
-
 
     f_out = open("/Users/vs/ha.ttl", "w")
     print(g.serialize(format='turtle'), file=f_out)
     print(g.serialize(format='turtle'))
     exit(0)
+
+
+def serviceOffer(HASS, MINE, SAREF, e_d, e_name, g, suffix, svc_name):
+    e_service_inst = MINE[mkname(e_name) + suffix]
+    g.add((e_service_inst, RDF.type, HASS[svc_name]))
+    g.add((e_d, SAREF['offers'], e_service_inst))
+
+
+@cache
+def getAttributes(e):
+    # Experimental
+    # Not directly YAML due to embedded serialized objects:
+    # - state_class
+    # - 'hvac_modes': [<HVACMode.OFF: 'off'>,
+    # - 'system_mode': '[<SystemMode.Heat: 4>]/heat'   <----- Quoted! Messes with regex a bit.
+    #   https://github.com/home-assistant/core/blob/master/homeassistant/components/zha/climate.py#L166
+    # - <Occupancy.Occupied: 1>
+    # - <NumberMode.AUTO: 'auto'>
+    #
+    attrs = getTextQuery(f'states.{e}.attributes')
+    # print(attrs)
+    pat_re = compileMogrifier()  # Cacheable...does it help?
+    a2 = attrs
+    state_class_s = pat_re.search(a2)
+    while state_class_s is not None:
+        a2 = state_class_s.group(1).join([a2[:state_class_s.start()], a2[state_class_s.end():]])
+        state_class_s = pat_re.search(a2)
+    return yaml.safe_load(a2)
 
 
 @cache
@@ -254,75 +301,37 @@ def setupSAREF():
     g.bind("s4bldg", S4BLDG)
     g.bind("mine", MINE)
     g.bind("hass", HASS)
-    saref_import = URIRef("http://my.name.spc/")  # Check!
+    saref_import = URIRef("http://my.name.spc/")  # Check! MINE?
     g.add((saref_import, RDF.type, OWL.Ontology))
     g.add((saref_import, OWL.imports, URIRef(str(SAREF))))
     g.add((saref_import, OWL.imports, URIRef(str(S4BLDG))))
 
     # Experimental
     # Manual entities, e.g. from "lights":
-    light = HASS['Light']
-    g.add((light, RDFS.subClassOf, SAREF['Appliance']))  # ?
+
+    # 4.3.3: "a dimmer lamp is a device that is of type saref:Actuator"
+    g.add((HASS['Light'], RDFS.subClassOf, SAREF['Actuator']))
     # TODO: light maybe_has brightness?
     g.add((HASS['Brightness'], RDFS.subClassOf, SAREF['Property']))
 
+    # Inject Service-classes:
+    svcs = {'ServiceToggle': ('Service', ['Light', 'Switch'])
+            # This is weird: SAREF has SwitchOnService -- only:
+            , 'ServiceTurnOn': ('SwitchOnService', ['Climate', 'Light', 'Switch'])
+            , 'ServiceTurnOff': ('Service', ['Climate', 'Light', 'Switch'])
+            , 'ServicePress': ('Service', ['Button'])}
+    for hass_svc, val in svcs.items():
+        saref_svc, _ = val
+        g.add((HASS[hass_svc], RDFS.subClassOf, SAREF[saref_svc]))
+
+
     # Let's patch SAREF a bit with our extensions:
     g.add((HASS['HumiditySensor'], RDFS.subClassOf, SAREF['Sensor']))
+    g.add((HASS['Button'], RDFS.subClassOf, SAREF['Actuator']))  # ?
     # END
 
-    return g, MINE, HASS, SAREF, S4BLDG
+    return svcs, g, MINE, HASS, SAREF, S4BLDG
 
 
 if __name__ == "__main__":
     main()
-
-exit(1)
-
-for (id, d) in my_devs.items():
-    d_g = URIRef("http://my.name.spc/" + mkname(d['name']))
-    d_cl = "Device"  # to be overriden below
-    cl = "Switch"
-
-    # Only assign one class? [TODO]
-    d_cl = "Sensor"
-    for s in d['sensors']:
-        # update class?
-        # XXX Bad idea is a Sensor provides multiple values?!
-        if s['original_device_class'] == "temperature":
-            d_cl = "TemperatureSensor"
-        e_name = s['name']
-        # TODO: same safety-net for switches?
-        if e_name is None:
-            e_name = s['original_name']
-            if e_name is None:
-                e_name = s['entity_id']
-        assert e_name is not None, str(s)
-        e_m = URIRef("http://my.name.spc/measure/" + mkname(e_name) + "_" + s['id'][0:3])  # TODO: id?
-        g.add((e_m, RDF.type, SAREF['Measurement']))
-        g.add((d_g, SAREF['makesMeasurement'], e_m))
-
-        e_prop = URIRef("http://my.name.spc/property/" + mkname(e_name))
-        # I want my multi-level modelling back...
-        unit = None
-        if s['original_device_class'] == "temperature":
-            unit = URIRef("http://my.name.spc/unit/" + mkname(s['unit_of_measurement']))
-            # TODO: I think we're adding dupes here?
-            g.add((unit, RDF.type, SAREF['TemperatureUnit']))
-            cl = SAREF['Temperature']
-        elif s['original_device_class'] == "current":
-            unit = URIRef("http://my.name.spc/unit/" + mkname(s['unit_of_measurement']))
-            g.add((unit, RDF.type, SAREF['PowerUnit']))
-            cl = SAREF['Power']
-        elif s['original_device_class'] == "humidity":
-            unit = URIRef("http://my.name.spc/unit/" + mkname(s['unit_of_measurement']))
-            # LOL, in SAREF, Power has PowerUnit, but Humidity doesn't have a unit...
-            g.add((unit, RDF.type, SAREF['UnitOfMeasure']))
-            cl = SAREF['Humidity']
-        else:
-            cl = SAREF['Property']
-        # assert cl subclassof Property
-        g.add((e_prop, RDF.type, cl))
-        if unit is not None:
-            g.add((e_m, SAREF['isMeasuredIn'], unit))
-        g.add((d_g, SAREF['measuresProperty'], e_prop))
-        g.add((e_m, SAREF['relatesToProperty'], e_prop))  # inverse inferred in Protégé
