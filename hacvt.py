@@ -1,3 +1,6 @@
+import json
+import re
+
 import config
 from functools import cache
 from rdflib import Literal, Graph, URIRef
@@ -26,6 +29,16 @@ def getYAML(query):
     j_response = session.post(config.hass_url, json=http_data)
     if j_response.status_code == 200:
         return yaml.safe_load(j_response.text)
+    else:
+        eprint(f"JSON request failed: " + str(j_response.text))
+        exit(1)
+
+
+def getTextQuery(query):
+    http_data = {'template': '{{ '+query+' }}'}
+    j_response = session.post(config.hass_url, json=http_data)
+    if j_response.status_code == 200:
+        return j_response.text
     else:
         eprint(f"JSON request failed: " + str(j_response.text))
         exit(1)
@@ -121,7 +134,28 @@ def main():
                 if e_name.endswith("_identify"):
                     continue
 
+                # Experimental section:
                 # e_friendly_name = getYAML(f'state_attr("{e}", "friendly_name")')
+                # Not directly YAML due to embedded serialized objects:
+                # - state_class
+                # - 'hvac_modes': [<HVACMode.OFF: 'off'>,
+                # - 'system_mode': '[<SystemMode.Heat: 4>]/heat'   <----- Quoted! Messes with regex a bit.
+                #   https://github.com/home-assistant/core/blob/master/homeassistant/components/zha/climate.py#L166
+                # - <Occupancy.Occupied: 1>
+                #
+                if False:
+                    attrs = getTextQuery(f'states.{e}.attributes')
+                    print(attrs)
+                    pat_re = compileMogrifier()  # Cacheable...does it help?
+                    a2 = attrs
+                    state_class_s = pat_re.search(a2)
+                    while state_class_s is not None:
+                        a2 = state_class_s.group(1).join([a2[:state_class_s.start()], a2[state_class_s.end():]])
+                        state_class_s = pat_re.search(a2)
+                    ja = yaml.safe_load(a2)
+                    print(ja)
+                # END
+
                 e_d = MINE[mkname(e_name)]
                 if domain not in class_to_saref:
                     c = SAREF['Device']
@@ -192,6 +226,12 @@ def main():
     print(g.serialize(format='turtle'), file=f_out)
     print(g.serialize(format='turtle'))
     exit(0)
+
+
+@cache
+def compileMogrifier():
+    # Not safe for quoted <>. Note "non-greedy" `+?`.
+    return re.compile(r'<(.+?): \'?\w+?\'?>')
 
 
 @cache
