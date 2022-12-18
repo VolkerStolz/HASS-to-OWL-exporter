@@ -28,7 +28,7 @@ session.headers = {'Content-type': 'application/json', 'Authorization': 'Bearer 
 
 def getYAML(query):
     http_data = {'template': '{{ '+query+' }}'}
-    j_response = session.post(config.hass_url, json=http_data)
+    j_response = session.post(config.hass_url+"template", json=http_data)
     if j_response.status_code == 200:
         return yaml.safe_load(j_response.text)
     else:
@@ -37,8 +37,9 @@ def getYAML(query):
 
 
 def getTextQuery(query):
+    # Unused
     http_data = {'template': '{{ '+query+' }}'}
-    j_response = session.post(config.hass_url, json=http_data)
+    j_response = session.post(config.hass_url+"template", json=http_data)
     if j_response.status_code == 200:
         return j_response.text
     else:
@@ -59,6 +60,7 @@ def getDeviceAttr(device, attr):
 
 
 def getStateAttr(e, attr):
+    # Do not use any more.
     return getYAML(f'state_attr("{e}", "{attr}")')
 
 
@@ -86,12 +88,13 @@ def main():
         , "number": None  # SERVICE_SET_VALUE
     }
 
+    # Nothing useful in there:
+    # automations = getAutomations()
+
     for d in getDevices():
         # https://github.com/home-assistant/core/blob/dev/homeassistant/helpers/device_registry.py
         # TODO: table-based conversion, manufacturer -> hasManufacturer,
         #  maybe with lambdas for transformation?
-        # TODO: Can we do this in a single HTTP-request/Jinja-template? Looks like {{ states.domain.entity.attributes }}
-        #  should do the trick for `state_attr`.
         manufacturer = getDeviceAttr(d, 'manufacturer')
         name = getDeviceAttr(d, 'name')
         model = getDeviceAttr(d, 'model')
@@ -152,13 +155,13 @@ def main():
                         # Special-casing (business rule):
                         if device_class == "temperature":
                             c = SAREF["TemperatureSensor"]
-                            assert attrs['state_class'] == "SensorStateClass.MEASUREMENT", attrs
+                            assert attrs['state_class'] == "measurement", attrs
                         elif device_class == "humidity":
                             c = HASS['HumiditySensor']
-                            assert attrs['state_class'] == "SensorStateClass.MEASUREMENT", attrs
+                            assert attrs['state_class'] == "measurement", attrs
                         elif device_class == "energy":
                             c = SAREF['Meter']
-                            assert attrs['state_class'] == "SensorStateClass.TOTAL_INCREASING", attrs
+                            assert attrs['state_class'] == "total_increasing", attrs
                         else:
                             # Spam:
                             if device_class is not None:
@@ -255,24 +258,18 @@ def serviceOffer(HASS, MINE, SAREF, e_d, e_name, g, suffix, svc_name):
 
 @cache
 def getAttributes(e):
-    # Experimental
-    # Not directly YAML due to embedded serialized objects:
-    # - state_class
-    # - 'hvac_modes': [<HVACMode.OFF: 'off'>,
-    # - 'system_mode': '[<SystemMode.Heat: 4>]/heat'   <----- Quoted! Messes with regex a bit.
-    #   https://github.com/home-assistant/core/blob/master/homeassistant/components/zha/climate.py#L166
-    # - <Occupancy.Occupied: 1>
-    # - <NumberMode.AUTO: 'auto'>
-    #
-    attrs = getTextQuery(f'states.{e}.attributes')
-    # print(attrs)
-    pat_re = compileMogrifier()  # Cacheable...does it help?
-    a2 = attrs
-    state_class_s = pat_re.search(a2)
-    while state_class_s is not None:
-        a2 = state_class_s.group(1).join([a2[:state_class_s.start()], a2[state_class_s.end():]])
-        state_class_s = pat_re.search(a2)
-    return yaml.safe_load(a2)
+    result = session.get(f"{config.hass_url}states/{e}")
+    # print(result.text)
+    return json.loads(result.text)['attributes']
+
+
+def getAutomations():
+    result = session.get(f"{config.hass_url}states")
+    out = {}
+    for k in json.loads(result.text):
+        if k['entity_id'].startswith("automation."):
+            out[k['entity_id']] = k['attributes']
+    return out
 
 
 @cache
@@ -315,6 +312,7 @@ def setupSAREF():
     g.add((HASS['Brightness'], RDFS.subClassOf, SAREF['Property']))
 
     # Inject Service-classes:
+    # TODO: Use /api/services instead of static encoding? But we still need a static map to SAREF.
     svcs = {'ServiceToggle': ('Service', ['Light', 'Switch'])
             # This is weird: SAREF has SwitchOnService -- only:
             , 'ServiceTurnOn': ('SwitchOnService', ['Climate', 'Light', 'Switch'])
@@ -323,7 +321,6 @@ def setupSAREF():
     for hass_svc, val in svcs.items():
         saref_svc, _ = val
         g.add((HASS[hass_svc], RDFS.subClassOf, SAREF[saref_svc]))
-
 
     # Let's patch SAREF a bit with our extensions:
     g.add((HASS['HumiditySensor'], RDFS.subClassOf, SAREF['Sensor']))
