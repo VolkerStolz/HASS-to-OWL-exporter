@@ -1,7 +1,4 @@
 import config
-import json
-from jsonpath_ng.ext import parse
-import os
 from rdflib import Literal, Graph, URIRef
 from rdflib.namespace import Namespace, RDF, RDFS, OWL
 import requests_cache
@@ -53,13 +50,17 @@ def getStateAttr(e, attr):
 # - escape "/" in names!
 
 def main():
-    g, MINE, SAREF, S4BLDG = setupSAREF()
+    g, MINE, HASS, SAREF, S4BLDG = setupSAREF()
+    # Load known types:
+    master = Graph()
+    master.parse("https://saref.etsi.org/core/v3.1.1/saref.ttl")
+
     class_to_saref = {
         "climate": SAREF["HVAC"]
         , "button": SAREF["Actuator"]
         , "sensor": SAREF["Sensor"]
         , "binary_sensor": SAREF["Sensor"]
-        , "light": SAREF["Appliance"]
+        , "light": HASS["Light"]
         , "switch": SAREF["Switch"]
         , "device_tracker": SAREF["Sensor"]
         , "device": SAREF["Device"]  # of course...
@@ -91,7 +92,7 @@ def main():
         # TODO: Entities can override this individually.
         d_area = getYAML(f'area_id("{d}")')
         if not d_area == "None":  # Careful, string!
-            area = URIRef("http://my.name.spc/areas/" + mkname(d_area))
+            area = MINE[mkname(d_area)]
             g.add((area, RDF.type, S4BLDG['BuildingSpace']))
             g.add((area, S4BLDG['contains'], d_g))
         # END Area
@@ -111,8 +112,13 @@ def main():
                 # Now let's find out the class:
                 assert e.count('.') == 1
                 (domain, e_name) = e.split('.')
+
+                # Let's ignore those as spam for now:
+                if e_name.endswith("_identify"):
+                    continue
+
                 # e_friendly_name = getYAML(f'state_attr("{e}", "friendly_name")')
-                e_d = URIRef("http://my.name.spc/" + mkname(e_name))
+                e_d = MINE[mkname(e_name)]
                 if domain not in class_to_saref:
                     c = SAREF['Device']
                 else:
@@ -123,18 +129,21 @@ def main():
                         if device_class == "temperature":
                             c = SAREF["TemperatureSensor"]
                         elif device_class == "humidity":
-                            c = MINE['HumiditySensor']
+                            c = HASS['HumiditySensor']
+                        else:
+                            eprint(f"WARN: Not handling class {device_class} (yet).")
                         # END
                 if c is None:
-                    eprint(f"WARN: Skipping {e} (no domain).")
+                    eprint(f"WARN: Skipping {e} (no mapping for domain {domain}).")
                 else:
                     # https://github.com/home-assistant/core/blob/dev/homeassistant/helpers/entity_registry.py
 
                     g.add((e_d, RDF.type, c))
                     g.add((d_g, SAREF['consistsOf'], e_d))
 
+                    # Let's be careful what is MINE and what is in HASS below.
                     if domain == "switch":
-                        e_function = URIRef("http://my.name.spc/function/" + mkname(e_name))  # TODO: name?
+                        e_function = MINE[mkname(e_name)]  # TODO: name?
                         g.add((e_function, RDF.type, SAREF['OnOffFunction']))
                         g.add((e_d, SAREF['hasFunction'], e_function))
                     elif domain == "climate":
@@ -145,7 +154,7 @@ def main():
                             g.add((e_d, RDF.type, SAREF['TemperatureSensor']))
                         q = getStateAttr(e, "current_humidity")
                         if q != "None":
-                            g.add((e_d, RDF.type, MINE['HumiditySensor']))
+                            g.add((e_d, RDF.type, HASS['HumiditySensor']))
                         # END
                     elif domain == "binary_sensor" or domain == "sensor":  # Handle both types in one for now.
                         # https://github.com/home-assistant/core/blob/dev/homeassistant/components/binary_sensor/__init__.py
@@ -153,19 +162,25 @@ def main():
                         if q != "None":
                             # Patch lower-case names:
                             q = q.title()
-                            # TODO: We want to create new types in our namespace, but somehow the check doesn't work.
-                            # Check with Eduard.
-                            if q not in SAREF:  # XXX Not working.
+                            # Let's look it up in the SAREF "master-list":
+                            q_o = hasEntity(master, SAREF, q)
+                            if q_o is None:
                                 eprint(f"INFO: Creating {q}.")
-                                q_o = MINE[q]
+                                q_o = HASS[q]
                                 # Create Property...
                                 g.add((q_o, RDFS.subClassOf, SAREF['Property']))
                                 # ...and instance:
-                            else:
-                                q_o = SAREF[q]
                             q_prop = MINE[f"{q}_prop"]
                             g.add((q_prop, RDF.type, q_o))
                             g.add((e_d, SAREF['measuresProperty'], q_prop))
+                    elif domain == "light":
+                        # brightness = 0 results in "None", silly, so we can't distinguish
+                        # "off" from "doesn't exist"?
+                        q = getStateAttr(e, 'brightness')
+                        if q != "None":
+                            brightness_prop = MINE['Brightness_prop']
+                            g.add((brightness_prop, RDF.type, HASS['Brightness']))
+                            g.add((e_d, SAREF['measuresProperty'], brightness_prop))
 
 
     f_out = open("/Users/vs/ha.ttl", "w")
@@ -174,25 +189,44 @@ def main():
     exit(0)
 
 
+def hasEntity(master, SAREF, q):
+    # TODO: Inefficient
+    q_o = None
+    for s, _, _ in master.triples((None, RDFS.subClassOf, SAREF['Property'])):
+        if s.endswith("/" + q):
+            q_o = SAREF[q]
+            break
+    return q_o
+
+
 def setupSAREF():
     g = Graph(bind_namespaces="core")
     SAREF = Namespace("https://saref.etsi.org/core/")
     S4BLDG = Namespace("https://saref.etsi.org/saref4bldg/")
     MINE = Namespace("http://my.name.spc/")
+    HASS = Namespace("http://home-assistant.io/")
     g.bind("saref", SAREF)
     g.bind("owl", OWL)
     g.bind("s4bldg", S4BLDG)
     g.bind("mine", MINE)
+    g.bind("hass", HASS)
     saref_import = URIRef("http://my.name.spc/")  # Check!
     g.add((saref_import, RDF.type, OWL.Ontology))
     g.add((saref_import, OWL.imports, URIRef(str(SAREF))))
     g.add((saref_import, OWL.imports, URIRef(str(S4BLDG))))
 
+    # Experimental
+    # Manual entities, e.g. from "lights":
+    light = HASS['Light']
+    g.add((light, RDFS.subClassOf, SAREF['Appliance']))  # ?
+    # TODO: light maybe_has brightness?
+    g.add((HASS['Brightness'], RDFS.subClassOf, SAREF['Property']))
+
     # Let's patch SAREF a bit with our extensions:
-    g.add((MINE['HumiditySensor'], RDFS.subClassOf, SAREF['Sensor']))
+    g.add((HASS['HumiditySensor'], RDFS.subClassOf, SAREF['Sensor']))
     # END
 
-    return g, MINE, SAREF, S4BLDG
+    return g, MINE, HASS, SAREF, S4BLDG
 
 
 if __name__ == "__main__":
