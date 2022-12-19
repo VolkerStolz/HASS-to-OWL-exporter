@@ -12,3 +12,17 @@ hass_token = "..."
 
 - `services.csv` is generated from the `Makefile`, but checked into the repo for convenience.
  Requires to have `homeassisstant` checked out in here.
+
+# To-Dos
+
+* Some part of the HASS-profile (e.g. Services) is now generated statically on startup.
+  We might as well dump it in a file and import it instead of generating it over and over again.
+* But: a lot of HASS-things are still only dynamically generated based on the things that we see,
+  like Measurement Units. Unfortunately they're impossible to find without reflection:
+    - for all classes in `homeassistant.const`,
+  
+      - if class name starts with `"UnitOf"`,
+
+        - grab the enums in there?
+        
+    I guess we'll just have to do it manually...

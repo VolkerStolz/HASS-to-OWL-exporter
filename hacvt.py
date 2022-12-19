@@ -265,7 +265,6 @@ def serviceOffer(MINE, SAREF, e_d, e_name, g, suffix, svc_obj):
 @cache
 def getAttributes(e):
     result = session.get(f"{config.hass_url}states/{e}")
-    # print(result.text)
     return json.loads(result.text)['attributes']
 
 
