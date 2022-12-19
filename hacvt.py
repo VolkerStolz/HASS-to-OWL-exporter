@@ -16,6 +16,8 @@ def eprint(*args, **kwargs):
 
 
 def mkname(name):
+    if isinstance(name,(int,float)):
+        name = str(name)
     return name.replace(" ", "_").replace("/", "_")
 
 
