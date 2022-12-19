@@ -342,13 +342,19 @@ def setupSAREF():
     # Note that using /api/services only gives you the services of your instance. Here, we want to create
     #  the metamodel/profile for HA, so we use the CSV generated from a git-checkout.
     # We still need a static map to SAREF.
+
     hass_svcs = mkServiceToDomainTable()
     for s, domains in hass_svcs.items():
         # This is weird: SAREF has SwitchOnService -- only:
         if s == "turn_on":
             s = "SwitchOnService"
         g.add((HASS[s], RDFS.subClassOf, SAREF['Service']))
+        # WIP -- do we want to inject ALL HASS classes below the corresponing SAREF devices?
+        # for d in domains:
+        #    print(s,d)
+        #    g.add((HASS[s], MINE['provided'], HASS[d]))
 
+    exit(1)
     # Let's patch SAREF a bit with our extensions:
     g.add((HASS['HumiditySensor'], RDFS.subClassOf, SAREF['Sensor']))
     g.add((HASS['Button'], RDFS.subClassOf, SAREF['Actuator']))  # ?
