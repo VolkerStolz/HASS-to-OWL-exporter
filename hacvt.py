@@ -2,7 +2,6 @@ import json
 import re
 
 import config
-import svcs
 
 from functools import cache
 from rdflib import Literal, Graph, URIRef
@@ -10,8 +9,6 @@ from rdflib.namespace import Namespace, RDF, RDFS, OWL
 import requests_cache
 import sys
 import yaml
-
-from svcs import mkServiceToDomainTable
 
 
 def eprint(*args, **kwargs):
@@ -178,14 +175,15 @@ def main():
                     g.add((d_g, SAREF['consistsOf'], e_d))
 
                     # Look up services this domain should have, and create them for this entity.
-                    for service in svcs.parseServices()[domain]:
-                        # Silly mapping, also see below.
-                        if service == "SERVICE_TURN_ON":
-                            s_class = SAREF["SwitchOnService"]
-                        else:
-                            s_class = HASS[service]
-                        # TODO: constructed name is ... meh...
-                        serviceOffer(MINE, SAREF, e_d, e_name, g, service[len("SERVICE"):], s_class)
+                    if domain in getServices():
+                        for service in getServices()[domain]:
+                            # Silly mapping, also see below.
+                            if service == "turn_on":
+                                s_class = SAREF["SwitchOnService"]
+                            else:
+                                s_class = HASS[service]
+                            # TODO: constructed name is ... meh...
+                            serviceOffer(MINE, SAREF, e_d, e_name, g, "_"+service, s_class)
 
                     # Let's be careful what is MINE and what is in HASS below.
                     if domain == "switch":
@@ -278,6 +276,28 @@ def getAutomations():
 
 
 @cache
+def getServices():
+    result = session.get(f"{config.hass_url}services")
+    out = {}
+    for k in json.loads(result.text):
+        out[k['domain']] = k['services']
+    return out
+
+
+def mkServiceToDomainTable():
+    hass_svcs = {}
+    for component_name, svc_services in getServices().items():
+        for s in svc_services:
+            if s in hass_svcs:
+                t = hass_svcs[s]
+                t.add(component_name)
+                hass_svcs[s] = t
+            else:
+                hass_svcs[s] = set([component_name])
+    return hass_svcs
+
+
+@cache
 def compileMogrifier():
     # Not safe for quoted <>. Note "non-greedy" `+?`.
     return re.compile(r'<(.+?): \'?\w+?\'?>')
@@ -320,10 +340,10 @@ def setupSAREF():
     # Note that using /api/services only gives you the services of your instance. Here, we want to create
     #  the metamodel/profile for HA, so we use the CSV generated from a git-checkout.
     # We still need a static map to SAREF.
-    hass_svcs = svcs.mkServiceToDomainTable()
+    hass_svcs = mkServiceToDomainTable()
     for s, domains in hass_svcs.items():
         # This is weird: SAREF has SwitchOnService -- only:
-        if s == "SERVICE_TURN_ON":
+        if s == "turn_on":
             s = "SwitchOnService"
         g.add((HASS[s], RDFS.subClassOf, SAREF['Service']))
 

@@ -8,11 +8,6 @@ hass_token = "..."
 ```
 2. Run `hacvt.py`, grab generated file and import e.g. into Protégé. You may need to tweak the filename in the code.
 
-# Notes
-
-- `services.csv` is generated from the `Makefile`, but checked into the repo for convenience.
- Requires to have `homeassisstant` checked out in here.
-
 # To-Dos
 
 * Some part of the HASS-profile (e.g. Services) is now generated statically on startup.
