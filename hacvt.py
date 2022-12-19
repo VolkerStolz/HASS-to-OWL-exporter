@@ -2,6 +2,8 @@ import json
 import re
 
 import config
+import svcs
+
 from functools import cache
 from rdflib import Literal, Graph, URIRef
 from rdflib.namespace import Namespace, RDF, RDFS, OWL
@@ -9,7 +11,7 @@ import requests_cache
 import sys
 import yaml
 
-from homeassistant.const import SERVICE_TOGGLE
+from svcs import mkServiceToDomainTable
 
 
 def eprint(*args, **kwargs):
@@ -175,21 +177,25 @@ def main():
                     g.add((e_d, RDF.type, c))
                     g.add((d_g, SAREF['consistsOf'], e_d))
 
+                    # Look up services this domain should have, and create them for this entity.
+                    for service in svcs.parseServices()[domain]:
+                        # Silly mapping, also see below.
+                        if service == "SERVICE_TURN_ON":
+                            s_class = SAREF["SwitchOnService"]
+                        else:
+                            s_class = HASS[service]
+                        # TODO: constructed name is ... meh...
+                        serviceOffer(MINE, SAREF, e_d, e_name, g, service[len("SERVICE"):], s_class)
+
                     # Let's be careful what is MINE and what is in HASS below.
                     if domain == "switch":
                         # e_function = MINE[mkname(e_name)+"_function"]  # TODO: name?
                         # g.add((e_function, RDF.type, SAREF['OnOffFunction']))
                         # g.add((e_d, SAREF['hasFunction'], e_function))
-                        # Tedious -- use Svcs-table?
-                        serviceOffer(HASS, MINE, SAREF, e_d, e_name, g, "_toggle", 'ServiceToggle')
-                        serviceOffer(HASS, MINE, SAREF, e_d, e_name, g, "_turnOn", 'ServiceTurnOn')
-                        serviceOffer(HASS, MINE, SAREF, e_d, e_name, g, "_turnOff", 'ServiceTurnOff')
+                        pass
                     elif domain == "button":
-                        serviceOffer(HASS, MINE, SAREF, e_d, e_name, g, "_press", 'ServicePress')
+                        pass
                     elif domain == "climate":
-                        # TODO: get from Svcs-table
-                        serviceOffer(HASS, MINE, SAREF, e_d, e_name, g, "_turnOn", 'ServiceTurnOn')
-                        serviceOffer(HASS, MINE, SAREF, e_d, e_name, g, "_turnOff", 'ServiceTurnOff')
                         # Business rule: https://github.com/home-assistant/core/blob/dev/homeassistant/components/climate/__init__.py#L214
                         # Are we delivering temperature readings, e.g. an HVAC?
                         q = attrs['current_temperature'] if 'current_temperature' in attrs else None
@@ -250,9 +256,9 @@ def main():
     exit(0)
 
 
-def serviceOffer(HASS, MINE, SAREF, e_d, e_name, g, suffix, svc_name):
+def serviceOffer(MINE, SAREF, e_d, e_name, g, suffix, svc_obj):
     e_service_inst = MINE[mkname(e_name) + suffix]
-    g.add((e_service_inst, RDF.type, HASS[svc_name]))
+    g.add((e_service_inst, RDF.type, svc_obj))
     g.add((e_d, SAREF['offers'], e_service_inst))
 
 
@@ -311,23 +317,23 @@ def setupSAREF():
     # TODO: light maybe_has brightness?
     g.add((HASS['Brightness'], RDFS.subClassOf, SAREF['Property']))
 
-    # Inject Service-classes:
-    # TODO: Use /api/services instead of static encoding? But we still need a static map to SAREF.
-    svcs = {'ServiceToggle': ('Service', ['Light', 'Switch'])
-            # This is weird: SAREF has SwitchOnService -- only:
-            , 'ServiceTurnOn': ('SwitchOnService', ['Climate', 'Light', 'Switch'])
-            , 'ServiceTurnOff': ('Service', ['Climate', 'Light', 'Switch'])
-            , 'ServicePress': ('Service', ['Button'])}
-    for hass_svc, val in svcs.items():
-        saref_svc, _ = val
-        g.add((HASS[hass_svc], RDFS.subClassOf, SAREF[saref_svc]))
+    # Inject Service-classes
+    # Note that using /api/services only gives you the services of your instance. Here, we want to create
+    #  the metamodel/profile for HA, so we use the CSV generated from a git-checkout.
+    # We still need a static map to SAREF.
+    hass_svcs = svcs.mkServiceToDomainTable()
+    for s, domains in hass_svcs.items():
+        # This is weird: SAREF has SwitchOnService -- only:
+        if s == "SERVICE_TURN_ON":
+            s = "SwitchOnService"
+        g.add((HASS[s], RDFS.subClassOf, SAREF['Service']))
 
     # Let's patch SAREF a bit with our extensions:
     g.add((HASS['HumiditySensor'], RDFS.subClassOf, SAREF['Sensor']))
     g.add((HASS['Button'], RDFS.subClassOf, SAREF['Actuator']))  # ?
     # END
 
-    return svcs, g, MINE, HASS, SAREF, S4BLDG
+    return hass_svcs, g, MINE, HASS, SAREF, S4BLDG
 
 
 if __name__ == "__main__":
