@@ -33,7 +33,7 @@ def getYAML(query):
     if j_response.status_code == 200:
         return yaml.safe_load(j_response.text)
     else:
-        eprint(f"JSON request failed: " + str(j_response.text))
+        eprint(f"YAML request failed: " + str(j_response.text))
         exit(1)
 
 
@@ -92,7 +92,8 @@ def main():
     # Nothing useful in there:
     # automations = getAutomations()
 
-    for d in getDevices():
+    the_devices = getDevices()
+    for d in the_devices:
         # https://github.com/home-assistant/core/blob/dev/homeassistant/helpers/device_registry.py
         # TODO: table-based conversion, manufacturer -> hasManufacturer,
         #  maybe with lambdas for transformation?
@@ -118,6 +119,18 @@ def main():
             g.add((area, RDF.type, S4BLDG['BuildingSpace']))
             g.add((area, S4BLDG['contains'], d_g))
         # END Area
+
+        # Handle `via_device` if present.
+        via = getDeviceAttr(d, 'via_device')
+        if via != "None":
+            other = None
+            # Matches construction of d_g above:
+            d2_name = getDeviceAttr(via, 'name')
+            d2_name_by_user = getDeviceAttr(via, 'name_by_user')
+            other = MINE[mkname(d2_name if d2_name_by_user == "None" else d2_name_by_user)]
+            eprint(f"INFO: Found via({d},{via})")
+            g.add(d_g, HASS['via_device'], other)
+        # END via_device
 
         es = getDeviceEntities(d)
 
