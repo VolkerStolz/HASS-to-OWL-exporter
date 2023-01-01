@@ -16,7 +16,7 @@ def eprint(*args, **kwargs):
 
 
 def mkname(name):
-    if isinstance(name,(int,float)):
+    if isinstance(name, (int, float)):
         name = str(name)
     return name.replace(" ", "_").replace("/", "_")
 
@@ -349,12 +349,11 @@ def setupSAREF():
         if s == "turn_on":
             s = "SwitchOnService"
         g.add((HASS[s], RDFS.subClassOf, SAREF['Service']))
-        # WIP -- do we want to inject ALL HASS classes below the corresponing SAREF devices?
+        # WIP -- do we want to inject ALL HASS classes below the corresponding SAREF devices?
         # for d in domains:
         #    print(s,d)
         #    g.add((HASS[s], MINE['provided'], HASS[d]))
 
-    exit(1)
     # Let's patch SAREF a bit with our extensions:
     g.add((HASS['HumiditySensor'], RDFS.subClassOf, SAREF['Sensor']))
     g.add((HASS['Button'], RDFS.subClassOf, SAREF['Actuator']))  # ?
