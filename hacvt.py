@@ -130,7 +130,7 @@ def main():
         else:
             # Create sub-devices
             for e in es:
-                print(f"Handling {e}:")
+                eprint(f"Handling {e}:")
                 # Now let's find out the class:
                 assert e.count('.') == 1
                 (domain, e_name) = e.split('.')
