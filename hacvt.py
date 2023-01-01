@@ -2,6 +2,7 @@ import json
 import re
 
 import config
+import homeassistant.core as ha
 
 from functools import cache
 from rdflib import Literal, Graph, URIRef
@@ -119,6 +120,8 @@ def main():
             g.add((area, S4BLDG['contains'], d_g))
         # END Area
 
+        # TODO: This only processes entities dangling off the current device.
+        # Can we use the same logic for "virtual" entities?
         es = getDeviceEntities(d)
 
         if len(es) == 0:
@@ -133,7 +136,7 @@ def main():
                 print(f"Handling {e}:")
                 # Now let's find out the class:
                 assert e.count('.') == 1
-                (domain, e_name) = e.split('.')
+                (domain, e_name) = ha.split_entity_id(e)
 
                 # Let's ignore those as spam for now.
                 # Note that we don't seem to see the underlying radio-properties RSSI, LQI
@@ -264,14 +267,28 @@ def serviceOffer(MINE, SAREF, e_d, e_name, g, suffix, svc_obj):
 
 @cache
 def getAttributes(e):
+    # TODO: could bounce through cached getStates() now.
     result = session.get(f"{config.hass_url}states/{e}")
     return json.loads(result.text)['attributes']
 
 
-def getAutomations():
+@cache
+def getStates():
     result = session.get(f"{config.hass_url}states")
+    return result.json
+
+
+@cache
+def getEntitiesWODevice():
+    for k in getStates():
+        if k['device_id'] == "None":
+            yield k
+
+
+@cache
+def getAutomations():
     out = {}
-    for k in json.loads(result.text):
+    for k in getStates():
         if k['entity_id'].startswith("automation."):
             out[k['entity_id']] = k['attributes']
     return out
