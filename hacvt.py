@@ -2,6 +2,7 @@ import json
 import re
 
 import config
+import homeassistant.core as ha
 
 from functools import cache
 from rdflib import Literal, Graph, URIRef
@@ -142,131 +143,142 @@ def main():
         #     continue  # TODO
         else:
             # Create sub-devices
-            for e in es:
+
+            # Let's ignore those as spam for now.
+            # Note that we don't seem to see the underlying radio-properties RSSI, LQI
+            # that HA is hiding explicitly in the UI.
+            def checkName(n):
+                assert n.count('.') == 1
+                (_domain, e_name) = ha.split_entity_id(n)
+                return not e_name.endswith("_identify")
+
+            for e in filter(checkName, es):
                 eprint(f"Handling {e}:")
-                # Now let's find out the class:
-                assert e.count('.') == 1
-                (domain, e_name) = e.split('.')
+                e_d = handle_entity(HASS, MINE, SAREF, class_to_saref, e, g, master)
+                # Derived entities and helpers are their own devices:
+                g.add((d_g, SAREF['consistsOf'], e_d))
 
-                # Let's ignore those as spam for now.
-                # Note that we don't seem to see the underlying radio-properties RSSI, LQI
-                # that HA is hiding explicitly in the UI.
-                if e_name.endswith("_identify"):
-                    continue
-
-                # Experimental section:
-                # e_friendly_name = getYAML(f'state_attr("{e}", "friendly_name")')
-                # END
-
-                attrs = getAttributes(e)
-                device_class = attrs['device_class'] if 'device_class' in attrs else None
-                e_d = MINE[mkname(e_name)]
-                if domain not in class_to_saref:
-                    c = SAREF['Device']
-                else:
-                    c = class_to_saref[domain]
-                    if c == SAREF['Sensor']:  # XXX?
-                        # Special-casing (business rule):
-                        if device_class == "temperature":
-                            c = SAREF["TemperatureSensor"]
-                            assert attrs['state_class'] == "measurement", attrs
-                        elif device_class == "humidity":
-                            c = HASS['HumiditySensor']
-                            assert attrs['state_class'] == "measurement", attrs
-                        elif device_class == "energy":
-                            c = SAREF['Meter']
-                            assert attrs['state_class'] == "total_increasing", attrs
-                        else:
-                            # Spam:
-                            if device_class is not None:
-                                eprint(f"WARN: Not handling class {device_class} (yet).")
-                        # END
-                if c is None:
-                    eprint(f"WARN: Skipping {e} (no mapping for domain {domain}).")
-                else:
-                    # https://github.com/home-assistant/core/blob/dev/homeassistant/helpers/entity_registry.py
-
-                    g.add((e_d, RDF.type, c))
-                    g.add((d_g, SAREF['consistsOf'], e_d))
-
-                    # Look up services this domain should have, and create them for this entity.
-                    if domain in getServices():
-                        for service in getServices()[domain]:
-                            # Silly mapping, also see below.
-                            if service == "turn_on":
-                                s_class = SAREF["SwitchOnService"]
-                            else:
-                                s_class = HASS[service]
-                            # TODO: constructed name is ... meh...
-                            serviceOffer(MINE, SAREF, e_d, e_name, g, "_"+service, s_class)
-
-                    # Let's be careful what is MINE and what is in HASS below.
-                    if domain == "switch":
-                        # e_function = MINE[mkname(e_name)+"_function"]  # TODO: name?
-                        # g.add((e_function, RDF.type, SAREF['OnOffFunction']))
-                        # g.add((e_d, SAREF['hasFunction'], e_function))
-                        pass
-                    elif domain == "button":
-                        pass
-                    elif domain == "climate":
-                        # Business rule: https://github.com/home-assistant/core/blob/dev/homeassistant/components/climate/__init__.py#L214
-                        # Are we delivering temperature readings, e.g. an HVAC?
-                        q = attrs['current_temperature'] if 'current_temperature' in attrs else None
-                        if q is not None:
-                            g.add((e_d, RDF.type, SAREF['TemperatureSensor']))
-                        q = attrs['current_humidity'] if 'current_humidity' in attrs else None
-                        if q is not None:
-                            g.add((e_d, RDF.type, HASS['HumiditySensor']))
-                        # END
-                    elif domain == "binary_sensor" or domain == "sensor":  # Handle both types in one for now.
-                        # https://github.com/home-assistant/core/blob/dev/homeassistant/components/binary_sensor/__init__.py
-                        if device_class is not None:
-                            # Patch lower-case names:
-                            q = device_class.title()
-                            # Let's look it up in the SAREF "master-list":
-                            q_o = hasEntity(master, SAREF, q)
-                            if q_o is None:
-                                eprint(f"INFO: Creating {q}.")
-                                q_o = HASS[q]
-                                # Create Property...
-                                g.add((q_o, RDFS.subClassOf, SAREF['Property']))
-                                # ...and instance:
-                            q_prop = MINE[f"{q}_prop"]
-                            g.add((q_prop, RDF.type, q_o))
-                            g.add((e_d, SAREF['measuresProperty'], q_prop))
-                        #
-                        q = attrs['unit_of_measurement'] if 'unit_of_measurement' in attrs else None
-                        if q is not None:
-                            if device_class == "temperature":
-                                unit = SAREF['TemperatureUnit']
-                            elif device_class == "current":
-                                unit = SAREF['PowerUnit']
-                            elif device_class == "power":
-                                unit = SAREF['PowerUnit']
-                            elif device_class == "energy":
-                                unit = SAREF['EnergyUnit']
-                            elif device_class == "pressure":
-                                unit = SAREF['PressureUnit']
-                            else:  # Not built-in.
-                                if q == "mbar":  # WIP
-                                    assert False, device_class
-                                unit = HASS[mkname(q)]
-                                g.add((unit, RDFS.subClassOf, SAREF['UnitOfMeasure']))
-                            g.add((MINE[mkname(q)], RDF.type, unit))
-                    elif domain == "light":
-                        # brightness = 0 results in "None", silly, so we can't distinguish
-                        # "off" from "doesn't exist"?
-                        q = attrs['brightness'] if 'brightness' in attrs else None
-                        if q is not None:
-                            brightness_prop = MINE['Brightness_prop']
-                            g.add((brightness_prop, RDF.type, HASS['Brightness']))
-                            # TODO: XXX Nope, we're not measuring, we're setting!?
-                            g.add((e_d, SAREF['measuresProperty'], brightness_prop))
+        for e in getEntitiesWODevice():
+            # These have an empty inverse of `consistsOf`
+            handle_entity(HASS, MINE, SAREF, class_to_saref, e['entity_id'], g, master)
 
     f_out = open("/Users/vs/ha.ttl", "w")
     print(g.serialize(format='turtle'), file=f_out)
     print(g.serialize(format='turtle'))
     exit(0)
+
+
+def handle_entity(HASS, MINE, SAREF, class_to_saref, e, g, master):
+    assert e.count('.') == 1
+    (domain, e_name) = ha.split_entity_id(e)
+    # Experimental section:
+    # e_friendly_name = getYAML(f'state_attr("{e}", "friendly_name")')
+    # END
+    attrs = getAttributes(e)
+    device_class = attrs['device_class'] if 'device_class' in attrs else None
+    e_d = MINE[mkname(e_name)]
+    if domain not in class_to_saref:
+        c = SAREF['Device']
+    else:
+        c = class_to_saref[domain]
+        if c == SAREF['Sensor']:  # XXX?
+            # Special-casing (business rule):
+            if device_class == "temperature":
+                c = SAREF["TemperatureSensor"]
+                assert attrs['state_class'] == "measurement", attrs
+            elif device_class == "humidity":
+                c = HASS['HumiditySensor']
+                assert attrs['state_class'] == "measurement", attrs
+            elif device_class == "energy":
+                c = SAREF['Meter']
+                # TODO -- probably we shouldn't be asserting those things.
+                # assert attrs['state_class'] == "total_increasing", attrs
+            else:
+                # Spam:
+                if device_class is not None:
+                    eprint(f"WARN: Not handling class {device_class} (yet).")
+            # END
+    if c is None:
+        eprint(f"WARN: Skipping {e} (no mapping for domain {domain}).")
+    else:
+        # https://github.com/home-assistant/core/blob/dev/homeassistant/helpers/entity_registry.py
+
+        g.add((e_d, RDF.type, c))
+
+        # Look up services this domain should have, and create them for this entity.
+        if domain in getServices():
+            for service in getServices()[domain]:
+                # Silly mapping, also see below.
+                if service == "turn_on":
+                    s_class = SAREF["SwitchOnService"]
+                else:
+                    s_class = HASS[service]
+                # TODO: constructed name is ... meh...
+                serviceOffer(MINE, SAREF, e_d, e_name, g, "_" + service, s_class)
+
+        # Let's be careful what is MINE and what is in HASS below.
+        if domain == "switch":
+            # e_function = MINE[mkname(e_name)+"_function"]  # TODO: name?
+            # g.add((e_function, RDF.type, SAREF['OnOffFunction']))
+            # g.add((e_d, SAREF['hasFunction'], e_function))
+            pass
+        elif domain == "button":
+            pass
+        elif domain == "climate":
+            # Business rule: https://github.com/home-assistant/core/blob/dev/homeassistant/components/climate/__init__.py#L214
+            # Are we delivering temperature readings, e.g. an HVAC?
+            q = attrs['current_temperature'] if 'current_temperature' in attrs else None
+            if q is not None:
+                g.add((e_d, RDF.type, SAREF['TemperatureSensor']))
+            q = attrs['current_humidity'] if 'current_humidity' in attrs else None
+            if q is not None:
+                g.add((e_d, RDF.type, HASS['HumiditySensor']))
+            # END
+        elif domain == "binary_sensor" or domain == "sensor":  # Handle both types in one for now.
+            # https://github.com/home-assistant/core/blob/dev/homeassistant/components/binary_sensor/__init__.py
+            if device_class is not None:
+                # Patch lower-case names:
+                q = device_class.title()
+                # Let's look it up in the SAREF "master-list":
+                q_o = hasEntity(master, SAREF, q)
+                if q_o is None:
+                    eprint(f"INFO: Creating {q}.")
+                    q_o = HASS[q]
+                    # Create Property...
+                    g.add((q_o, RDFS.subClassOf, SAREF['Property']))
+                    # ...and instance:
+                q_prop = MINE[f"{q}_prop"]
+                g.add((q_prop, RDF.type, q_o))
+                g.add((e_d, SAREF['measuresProperty'], q_prop))
+            #
+            q = attrs['unit_of_measurement'] if 'unit_of_measurement' in attrs else None
+            if q is not None:
+                if device_class == "temperature":
+                    unit = SAREF['TemperatureUnit']
+                elif device_class == "current":
+                    unit = SAREF['PowerUnit']
+                elif device_class == "power":
+                    unit = SAREF['PowerUnit']
+                elif device_class == "energy":
+                    unit = SAREF['EnergyUnit']
+                elif device_class == "pressure":
+                    unit = SAREF['PressureUnit']
+                else:  # Not built-in.
+                    if q == "mbar":  # WIP
+                        assert False, device_class
+                    unit = HASS[mkname(q)]
+                    g.add((unit, RDFS.subClassOf, SAREF['UnitOfMeasure']))
+                g.add((MINE[mkname(q)], RDF.type, unit))
+        elif domain == "light":
+            # brightness = 0 results in "None", silly, so we can't distinguish
+            # "off" from "doesn't exist"?
+            q = attrs['brightness'] if 'brightness' in attrs else None
+            if q is not None:
+                brightness_prop = MINE['Brightness_prop']
+                g.add((brightness_prop, RDF.type, HASS['Brightness']))
+                # TODO: XXX Nope, we're not measuring, we're setting!?
+                g.add((e_d, SAREF['measuresProperty'], brightness_prop))
+    return e_d
 
 
 def serviceOffer(MINE, SAREF, e_d, e_name, g, suffix, svc_obj):
@@ -277,8 +289,22 @@ def serviceOffer(MINE, SAREF, e_d, e_name, g, suffix, svc_obj):
 
 @cache
 def getAttributes(e):
+    # TODO: could bounce through cached getStates() now.
     result = session.get(f"{config.hass_url}states/{e}")
-    return json.loads(result.text)['attributes']
+    j = json.loads(result.text)
+    return j['attributes'] if 'attributes' in j else []
+
+
+@cache
+def getStates():
+    result = session.get(f"{config.hass_url}states")
+    return result.json()
+
+
+def getEntitiesWODevice():
+    for k in getStates():
+        if 'device_id' not in k:
+            yield k
 
 
 def getAutomations():
