@@ -3,6 +3,7 @@ import re
 
 import config
 import homeassistant.core as ha
+import homeassistant.helpers.config_validation as cv
 
 from functools import cache
 from rdflib import Literal, Graph, URIRef
@@ -161,6 +162,30 @@ def main():
         for e in getEntitiesWODevice():
             # These have an empty inverse of `consistsOf`
             handle_entity(HASS, MINE, SAREF, class_to_saref, e['entity_id'], g, master)
+
+        ha_automation = HASS['Automation']
+        ha_action = HASS['Action']
+        for a_id, a in getAutomations().items():
+            _, a_name = ha.split_entity_id(a_id)
+            a_o = MINE[mkname(a_name)]
+            g.add((a_o, RDF.type, ha_automation))  # Apparently we also subclass Device somewhere else
+            g.add((a_o, HASS['friendly_name'], Literal(a['friendly_name'])))
+            # {'id': '1672829613487', 'alias': 'Floorheating BACK', 'description': '', 'trigger': [{'platform': 'time', 'at': 'input_datetime.floorheating_on'}], 'condition': [], 'action': [{'service': 'climate.set_temperature', 'data': {'temperature': 17}, 'target': {'device_id': 'ec5cb183f030a83754c6f402af08420f'}}], 'mode': 'single'}
+            result = session.get(f"{config.hass_url}config/automation/config/{a['id']}")
+            a_config = result.json()
+            i = 0
+            for an_action in a_config['action']:
+                # Convert back to its type:
+                the_action = cv.determine_script_action(an_action)
+                o_action = HASS[the_action]  # TODO: should generate all statically from the Python MM
+                g.add((o_action, RDFS.subClassOf, ha_action))
+                o_action_instance = MINE[mkname(a_name)+"_"+str(i)]
+                g.add((o_action_instance, RDF.type, o_action))
+                g.add((a_o, HASS['consistsOf'], o_action_instance))  # TODO: check multiplicity
+                i = i+1
+                # TODO: populate schema by action type
+                # `action`s are governed by: https://github.com/home-assistant/core/blob/31a787558fd312331b55e5c2c4b33341fc3601fc/homeassistant/helpers/script.py#L270
+                # After that it's following the `_SCHEMA`
 
     f_out = open("/Users/vs/ha.ttl", "w")
     print(g.serialize(format='turtle'), file=f_out)
