@@ -164,7 +164,6 @@ def main():
             handle_entity(HASS, MINE, SAREF, class_to_saref, e['entity_id'], g, master)
 
         ha_automation = HASS['Automation']
-        ha_action = HASS['Action']
         for a_id, a in getAutomations().items():
             _, a_name = ha.split_entity_id(a_id)
             a_o = MINE[mkname(a_name)]
@@ -178,7 +177,6 @@ def main():
                 # Convert back to its type:
                 the_action = cv.determine_script_action(an_action)
                 o_action = HASS[the_action]  # TODO: should generate all statically from the Python MM
-                g.add((o_action, RDFS.subClassOf, ha_action))
                 o_action_instance = MINE[mkname(a_name)+"_"+str(i)]
                 g.add((o_action_instance, RDF.type, o_action))
                 g.add((a_o, HASS['consistsOf'], o_action_instance))  # TODO: check multiplicity
@@ -344,6 +342,7 @@ def getAutomations():
 @cache
 def getServices():
     result = session.get(f"{config.hass_url}services")
+    assert result.status_code == 200, (result.status_code, result.text)
     out = {}
     for k in json.loads(result.text):
         out[k['domain']] = k['services']
@@ -423,6 +422,12 @@ def setupSAREF():
     g.add((HASS['Button'], RDFS.subClassOf, SAREF['Actuator']))  # ?
     # END
 
+    # BEGIN SCHEMA metadata, reflection on
+    #  https://github.com/home-assistant/core/blob/9f7fd8956f22bd873d14ae89460cdffe6ef6f85d/homeassistant/helpers/config_validation.py#L1641
+    ha_action = HASS['Action']
+    for k, v in cv.ACTION_TYPE_SCHEMAS.items():
+        g.add((HASS[k], RDFS.subClassOf, ha_action))
+    # END
     return hass_svcs, g, MINE, HASS, SAREF, S4BLDG
 
 
