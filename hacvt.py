@@ -23,6 +23,15 @@ def mkname(name):
     return name.replace(" ", "_").replace("/", "_")
 
 
+def mkEntityURI(MINE, entity_id):
+    _, e_name = ha.split_entity_id(entity_id)
+    return MINE["entity/"+mkname(e_name)]
+
+
+def mkLocationURI(MINE, l_name):
+    return MINE["location/"+mkname(l_name)]
+
+
 # In config: hass_url = "http://dehvl.local:8123/api/template"
 
 session = requests_cache.CachedSession('my_cache')
@@ -32,22 +41,16 @@ session.headers = {'Content-type': 'application/json', 'Authorization': 'Bearer 
 def getYAML(query):
     http_data = {'template': '{{ '+query+' }}'}
     j_response = session.post(config.hass_url+"template", json=http_data)
-    if j_response.status_code == 200:
-        return yaml.safe_load(j_response.text)
-    else:
-        eprint(f"YAML request failed: " + str(j_response.text))
-        exit(1)
+    assert j_response.status_code == 200, f"YAML request failed: " + str(j_response.text)
+    return yaml.safe_load(j_response.text)
 
 
 def getTextQuery(query):
     # Unused
     http_data = {'template': '{{ '+query+' }}'}
     j_response = session.post(config.hass_url+"template", json=http_data)
-    if j_response.status_code == 200:
-        return j_response.text
-    else:
-        eprint(f"JSON request failed: " + str(j_response.text))
-        exit(1)
+    assert j_response.status_code == 200, f"JSON request failed: " + str(j_response.text)
+    return j_response.text
 
 
 def getDevices():
@@ -60,11 +63,6 @@ def getDeviceEntities(device):
 
 def getDeviceAttr(device, attr):
     return getYAML('device_attr("'+device+'","'+attr+'")')
-
-
-def getStateAttr(e, attr):
-    # Do not use any more.
-    return getYAML(f'state_attr("{e}", "{attr}")')
 
 
 # TODOs
@@ -91,9 +89,6 @@ def main():
         , "number": None  # SERVICE_SET_VALUE
     }
 
-    # Nothing useful in there:
-    # automations = getAutomations()
-
     the_devices = getDevices()
     for d in the_devices:
         # https://github.com/home-assistant/core/blob/dev/homeassistant/helpers/device_registry.py
@@ -117,7 +112,7 @@ def main():
         # TODO: Entities can override this individually.
         d_area = getYAML(f'area_id("{d}")')
         if not d_area == "None":  # Careful, string!
-            area = MINE[mkname(d_area)]
+            area = mkLocationURI(MINE, d_area)
             g.add((area, RDF.type, S4BLDG['BuildingSpace']))
             g.add((area, S4BLDG['contains'], d_g))
         # END Area
@@ -176,19 +171,48 @@ def main():
             for an_action in a_config['action']:
                 # Convert back to its type:
                 the_action = cv.determine_script_action(an_action)
-                o_action = HASS[the_action]  # TODO: should generate all statically from the Python MM
+                # TODO: assert HASS[the_action] already exists since we should have the schema.
+                o_action = HASS[the_action]
                 o_action_instance = MINE[mkname(a_name)+"_"+str(i)]
                 g.add((o_action_instance, RDF.type, o_action))
-                g.add((a_o, HASS['consistsOf'], o_action_instance))  # TODO: check multiplicity
+                g.add((a_o, HASS['consistsOf'], o_action_instance))  # TODO: create multiplicity in schema
                 i = i+1
                 # TODO: populate schema by action type
+                if the_action == "call_service":
+                    service_id = an_action['service']
+                    assert not isinstance(service_id, list)
+                    if 'entity_id' in an_action['target']:
+                        # That may be a list!
+                        if isinstance(an_action['target']['entity_id'], list):
+                            es = an_action['target']['entity_id']
+                        else:
+                            es = [an_action['target']['entity_id']]
+                        for e in es:
+                            # This is a little bit tricky where we diverge from HA's modelling:
+                            #  We have a concrete instance already which corresponds to this particular pair of `service, target`.
+                            _, t_name = ha.split_entity_id(e)
+                            _, service_name = ha.split_entity_id(service_id)
+                            target_entity = MINE[mkname(t_name)+"_"+service_name]
+                            g.add((o_action_instance, HASS['target'], target_entity))
+                    # eprint(an_action)
+                    # break
                 # `action`s are governed by: https://github.com/home-assistant/core/blob/31a787558fd312331b55e5c2c4b33341fc3601fc/homeassistant/helpers/script.py#L270
                 # After that it's following the `_SCHEMA`
 
+    # Print Turtle output both to file and console:
     f_out = open("/Users/vs/ha.ttl", "w")
     print(g.serialize(format='turtle'), file=f_out)
     print(g.serialize(format='turtle'))
     exit(0)
+
+
+def mkServiceURI(MINE, SAREF, service_id):
+    _, service_name = ha.split_entity_id(service_id)
+    if service_name == "turn_on":  # dupe TODO
+        e_service_instance = SAREF["SwitchOnService"]
+    else:
+        e_service_instance = MINE[mkname(service_name) + "_service"]
+    return e_service_instance
 
 
 def handle_entity(HASS, MINE, SAREF, class_to_saref, e, g, master):
@@ -199,7 +223,8 @@ def handle_entity(HASS, MINE, SAREF, class_to_saref, e, g, master):
     # END
     attrs = getAttributes(e)
     device_class = attrs['device_class'] if 'device_class' in attrs else None
-    e_d = MINE[mkname(e_name)]
+    # TODO: Probably creates overlapping names!
+    e_d = mkEntityURI(MINE, e)
     if domain not in class_to_saref:
         c = SAREF['Device']
     else:
@@ -363,12 +388,6 @@ def mkServiceToDomainTable():
 
 
 @cache
-def compileMogrifier():
-    # Not safe for quoted <>. Note "non-greedy" `+?`.
-    return re.compile(r'<(.+?): \'?\w+?\'?>')
-
-
-@cache
 def hasEntity(master, SAREF, q):
     # TODO: At least we're caching now...but we could precompute a dictionary.
     for s, _, _ in master.triples((None, RDFS.subClassOf, SAREF['Property'])):
@@ -428,6 +447,9 @@ def setupSAREF():
     for k, v in cv.ACTION_TYPE_SCHEMAS.items():
         g.add((HASS[k], RDFS.subClassOf, ha_action))
     # END
+
+    # TODO: Export HASS schema as separate file and import in model, instead of having it in the graph. (#5)
+    # TODO: Should probably be in a class...
     return hass_svcs, g, MINE, HASS, SAREF, S4BLDG
 
 
