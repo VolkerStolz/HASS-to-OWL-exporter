@@ -1,9 +1,12 @@
 import json
 import re
 
+import homeassistant.const
+
 import config
 import homeassistant.core as ha
 import homeassistant.helpers.config_validation as cv
+from homeassistant.components.sensor import SensorDeviceClass
 
 from functools import cache
 from rdflib import Literal, Graph, URIRef
@@ -177,8 +180,7 @@ def main():
                 g.add((o_action_instance, RDF.type, o_action))
                 g.add((a_o, HASS['consistsOf'], o_action_instance))  # TODO: create multiplicity in schema
                 i = i+1
-                # TODO: populate schema by action type
-                if the_action == "call_service":
+                if the_action == cv.SCRIPT_ACTION_CALL_SERVICE:
                     service_id = an_action['service']
                     assert not isinstance(service_id, list)
                     if 'entity_id' in an_action['target']:
@@ -194,8 +196,20 @@ def main():
                             _, service_name = ha.split_entity_id(service_id)
                             target_entity = MINE[mkname(t_name)+"_"+service_name]
                             g.add((o_action_instance, HASS['target'], target_entity))
-                    # eprint(an_action)
-                    # break
+                    else:
+                        eprint(an_action)
+                        exit(1)
+                elif the_action == cv.SCRIPT_ACTION_DEVICE_AUTOMATION:
+                    _, e_name = ha.split_entity_id(an_action['entity_id'])
+                    # Inventing 'target' here, there isn't much in Python?
+                    g.add((o_action_instance, HASS['target'], MINE[mkname(e_name)+"_"+the_action]))
+                elif the_action == cv.SCRIPT_ACTION_DELAY:
+                    eprint(f"WARN: Skipping {the_action}: {str(an_action)}")
+                    pass
+                else:
+                    eprint(the_action+ ":" +str(an_action))
+                    exit(2)
+                # TODO: populate schema by action type
                 # `action`s are governed by: https://github.com/home-assistant/core/blob/31a787558fd312331b55e5c2c4b33341fc3601fc/homeassistant/helpers/script.py#L270
                 # After that it's following the `_SCHEMA`
 
@@ -208,10 +222,10 @@ def main():
 
 def mkServiceURI(MINE, SAREF, service_id):
     _, service_name = ha.split_entity_id(service_id)
-    if service_name == "turn_on":  # dupe TODO
+    if service_name == homeassistant.const.SERVICE_TURN_ON:  # dupe TODO
         e_service_instance = SAREF["SwitchOnService"]
     else:
-        e_service_instance = MINE[mkname(service_name) + "_service"]
+        e_service_instance = MINE["service/"+mkname(service_name) + "_service"]
     return e_service_instance
 
 
@@ -257,7 +271,7 @@ def handle_entity(HASS, MINE, SAREF, class_to_saref, e, g, master):
         if domain in getServices():
             for service in getServices()[domain]:
                 # Silly mapping, also see below.
-                if service == "turn_on":
+                if service == homeassistant.const.SERVICE_TURN_ON:
                     s_class = SAREF["SwitchOnService"]
                 else:
                     s_class = HASS[service]
@@ -265,7 +279,7 @@ def handle_entity(HASS, MINE, SAREF, class_to_saref, e, g, master):
                 serviceOffer(MINE, SAREF, e_d, e_name, g, "_" + service, s_class)
 
         # Let's be careful what is MINE and what is in HASS below.
-        if domain == "switch":
+        if domain == homeassistant.const.Platform.SWITCH:  # TODO: more of those.
             # e_function = MINE[mkname(e_name)+"_function"]  # TODO: name?
             # g.add((e_function, RDF.type, SAREF['OnOffFunction']))
             # g.add((e_d, SAREF['hasFunction'], e_function))
@@ -301,7 +315,7 @@ def handle_entity(HASS, MINE, SAREF, class_to_saref, e, g, master):
             #
             q = attrs['unit_of_measurement'] if 'unit_of_measurement' in attrs else None
             if q is not None:
-                if device_class == "temperature":
+                if device_class == SensorDeviceClass.TEMPERATURE:
                     unit = SAREF['TemperatureUnit']
                 elif device_class == "current":
                     unit = SAREF['PowerUnit']
@@ -330,7 +344,7 @@ def handle_entity(HASS, MINE, SAREF, class_to_saref, e, g, master):
 
 
 def serviceOffer(MINE, SAREF, e_d, e_name, g, suffix, svc_obj):
-    e_service_inst = MINE[mkname(e_name) + suffix]
+    e_service_inst = MINE["service/"+mkname(e_name) + suffix]
     g.add((e_service_inst, RDF.type, svc_obj))
     g.add((e_d, SAREF['offers'], e_service_inst))
 
@@ -428,7 +442,7 @@ def setupSAREF():
     hass_svcs = mkServiceToDomainTable()
     for s, domains in hass_svcs.items():
         # This is weird: SAREF has SwitchOnService -- only:
-        if s == "turn_on":
+        if s == homeassistant.const.SERVICE_TURN_ON:
             s = "SwitchOnService"
         g.add((HASS[s], RDFS.subClassOf, SAREF['Service']))
         # WIP -- do we want to inject ALL HASS classes below the corresponding SAREF devices?
