@@ -1,12 +1,13 @@
 import json
 import re
 
-import homeassistant.const
+import homeassistant.const as hc
 
 import config
 import homeassistant.core as ha
 import homeassistant.helpers.config_validation as cv
 from homeassistant.components.sensor import SensorDeviceClass
+import homeassistant.components.binary_sensor, homeassistant.components.button, homeassistant.components.sensor
 
 from functools import cache
 from rdflib import Literal, Graph, URIRef
@@ -27,8 +28,8 @@ def mkname(name):
 
 
 def mkEntityURI(MINE, entity_id):
-    _, e_name = ha.split_entity_id(entity_id)
-    return MINE["entity/"+mkname(e_name)]
+    e_platform, e_name = ha.split_entity_id(entity_id)
+    return MINE["entity/"+e_platform+"_"+mkname(e_name)]
 
 
 def mkLocationURI(MINE, l_name):
@@ -95,6 +96,7 @@ def main():
     the_devices = getDevices()
     for d in the_devices:
         # https://github.com/home-assistant/core/blob/dev/homeassistant/helpers/device_registry.py
+        # For these we don't have constants.
         # TODO: table-based conversion, manufacturer -> hasManufacturer,
         #  maybe with lambdas for transformation?
         manufacturer = getDeviceAttr(d, 'manufacturer')
@@ -153,65 +155,18 @@ def main():
 
             for e in filter(checkName, es):
                 eprint(f"Handling {e}:")
-                e_d = handle_entity(HASS, MINE, SAREF, class_to_saref, e, g, master)
+                e_d = handle_entity(HASS, MINE, SAREF, class_to_saref, d, e, g, master)
                 # Derived entities and helpers are their own devices:
                 g.add((d_g, SAREF['consistsOf'], e_d))
 
         for e in getEntitiesWODevice():
             # These have an empty inverse of `consistsOf`
-            handle_entity(HASS, MINE, SAREF, class_to_saref, e['entity_id'], g, master)
+            platform, name = ha.split_entity_id(e['entity_id'])
+            if platform == "automation":
+                handleAutomation(HASS, MINE, e['attributes'], name, g)
+            else:
+                handle_entity(HASS, MINE, SAREF, class_to_saref, None, e['entity_id'], g, master)
 
-        ha_automation = HASS['Automation']
-        for a_id, a in getAutomations().items():
-            _, a_name = ha.split_entity_id(a_id)
-            a_o = MINE[mkname(a_name)]
-            g.add((a_o, RDF.type, ha_automation))  # Apparently we also subclass Device somewhere else
-            g.add((a_o, HASS['friendly_name'], Literal(a['friendly_name'])))
-            # {'id': '1672829613487', 'alias': 'Floorheating BACK', 'description': '', 'trigger': [{'platform': 'time', 'at': 'input_datetime.floorheating_on'}], 'condition': [], 'action': [{'service': 'climate.set_temperature', 'data': {'temperature': 17}, 'target': {'device_id': 'ec5cb183f030a83754c6f402af08420f'}}], 'mode': 'single'}
-            result = session.get(f"{config.hass_url}config/automation/config/{a['id']}")
-            a_config = result.json()
-            i = 0
-            for an_action in a_config['action']:
-                # Convert back to its type:
-                the_action = cv.determine_script_action(an_action)
-                # TODO: assert HASS[the_action] already exists since we should have the schema.
-                o_action = HASS[the_action]
-                o_action_instance = MINE[mkname(a_name)+"_"+str(i)]
-                g.add((o_action_instance, RDF.type, o_action))
-                g.add((a_o, HASS['consistsOf'], o_action_instance))  # TODO: create multiplicity in schema
-                i = i+1
-                if the_action == cv.SCRIPT_ACTION_CALL_SERVICE:
-                    service_id = an_action['service']
-                    assert not isinstance(service_id, list)
-                    if 'entity_id' in an_action['target']:
-                        # That may be a list!
-                        if isinstance(an_action['target']['entity_id'], list):
-                            es = an_action['target']['entity_id']
-                        else:
-                            es = [an_action['target']['entity_id']]
-                        for e in es:
-                            # This is a little bit tricky where we diverge from HA's modelling:
-                            #  We have a concrete instance already which corresponds to this particular pair of `service, target`.
-                            _, t_name = ha.split_entity_id(e)
-                            _, service_name = ha.split_entity_id(service_id)
-                            target_entity = MINE[mkname(t_name)+"_"+service_name]
-                            g.add((o_action_instance, HASS['target'], target_entity))
-                    else:
-                        eprint(an_action)
-                        exit(1)
-                elif the_action == cv.SCRIPT_ACTION_DEVICE_AUTOMATION:
-                    _, e_name = ha.split_entity_id(an_action['entity_id'])
-                    # Inventing 'target' here, there isn't much in Python?
-                    g.add((o_action_instance, HASS['target'], MINE[mkname(e_name)+"_"+the_action]))
-                elif the_action == cv.SCRIPT_ACTION_DELAY:
-                    eprint(f"WARN: Skipping {the_action}: {str(an_action)}")
-                    pass
-                else:
-                    eprint(the_action+ ":" +str(an_action))
-                    exit(2)
-                # TODO: populate schema by action type
-                # `action`s are governed by: https://github.com/home-assistant/core/blob/31a787558fd312331b55e5c2c4b33341fc3601fc/homeassistant/helpers/script.py#L270
-                # After that it's following the `_SCHEMA`
 
     # Print Turtle output both to file and console:
     f_out = open("/Users/vs/ha.ttl", "w")
@@ -220,16 +175,73 @@ def main():
     exit(0)
 
 
+def handleAutomation(HASS, MINE, a, a_name, g):
+    a_o = MINE["automation/" + mkname(a_name)]
+    g.add((a_o, RDF.type, (HASS['Automation'])))  # Apparently we also subclass Device somewhere else
+    g.add((a_o, HASS['friendly_name'], Literal(a[hc.CONF_FRIENDLY_NAME])))
+    # {'id': '1672829613487', 'alias': 'Floorheating BACK', 'description': '', 'trigger': [{'platform': 'time', 'at': 'input_datetime.floorheating_on'}], 'condition': [], 'action': [{'service': 'climate.set_temperature', 'data': {'temperature': 17}, 'target': {'device_id': 'ec5cb183f030a83754c6f402af08420f'}}], 'mode': 'single'}
+    result = session.get(f"{config.hass_url}config/automation/config/{a['id']}")
+    a_config = result.json()
+    i = 0
+    for an_action in a_config['action']:
+        # Convert back to its type:
+        the_action = cv.determine_script_action(an_action)
+        # This call seems to perform some lifting, e.g. in cases where a one-element list
+        #  would be a single element in JSON, but the code would like to work with the list.
+        # assert cv.script_action(an_action) == an_action, (an_action, cv.script_action(an_action))
+        an_action = cv.script_action(an_action)
+        # TODO: assert HASS[the_action] already exists since we should have the schema.
+        o_action = HASS["action/" + the_action]
+        o_action_instance = MINE["action/" + mkname(a_name) + "_" + str(i)]
+        g.add((o_action_instance, RDF.type, o_action))
+        g.add((a_o, HASS['consistsOf'], o_action_instance))  # TODO: create multiplicity in schema
+        i = i + 1
+        if the_action == cv.SCRIPT_ACTION_CALL_SERVICE:
+            # TODO: use schema in Python...
+            service_id = an_action['service']
+            assert not isinstance(service_id, list)
+            if 'entity_id' in an_action['target']:
+                for e in an_action['target']['entity_id']:
+                    # This is a little bit tricky where we diverge from HA's modelling:
+                    #  We have a concrete instance already which corresponds to this particular pair of `service, target`.
+                    _, t_name = ha.split_entity_id(e)
+                    _, service_name = ha.split_entity_id(service_id)
+                    target_entity = MINE["service/" + mkname(t_name) + "_" + service_name]
+                    g.add((o_action_instance, HASS['target'], target_entity))
+            else:
+                eprint(an_action)
+                exit(1)
+        elif the_action == cv.SCRIPT_ACTION_DEVICE_AUTOMATION:
+            _, e_name = ha.split_entity_id(an_action['entity_id'])
+            # Inventing 'target' here, there isn't much in Python?
+            # I think type+entity is good enough, and the device_id is redundant/from/for the dialog
+            #  so that it knows how to populate the Action-dropdown?
+            # TODO: Assert for sanity, but we need transitivity...
+            name = mkname(e_name) + "_" + an_action['type']
+            # assert hasEntity(master, Namespace("http://my.name.spc/service/"), 'Service', name) is not None, name
+            g.add((o_action_instance, HASS['target'], MINE["service/" + name]))
+            # The JSON also carries a `domain` which is most likely derived.
+        elif the_action == cv.SCRIPT_ACTION_DELAY:
+            g.add((o_action_instance, HASS['target']  # or what?
+                   , Literal(f"TODO: {str(an_action)}")))
+        else:
+            eprint(the_action + ":" + str(an_action))
+            exit(2)
+        # TODO: populate schema by action type
+        # `action`s are governed by: https://github.com/home-assistant/core/blob/31a787558fd312331b55e5c2c4b33341fc3601fc/homeassistant/helpers/script.py#L270
+        # After that it's following the `_SCHEMA`
+
+
 def mkServiceURI(MINE, SAREF, service_id):
     _, service_name = ha.split_entity_id(service_id)
-    if service_name == homeassistant.const.SERVICE_TURN_ON:  # dupe TODO
+    if service_name == hc.SERVICE_TURN_ON:  # dupe TODO
         e_service_instance = SAREF["SwitchOnService"]
     else:
         e_service_instance = MINE["service/"+mkname(service_name) + "_service"]
     return e_service_instance
 
 
-def handle_entity(HASS, MINE, SAREF, class_to_saref, e, g, master):
+def handle_entity(HASS, MINE, SAREF, class_to_saref, device, e, g, master):
     assert e.count('.') == 1
     (domain, e_name) = ha.split_entity_id(e)
     # Experimental section:
@@ -237,21 +249,25 @@ def handle_entity(HASS, MINE, SAREF, class_to_saref, e, g, master):
     # END
     attrs = getAttributes(e)
     device_class = attrs['device_class'] if 'device_class' in attrs else None
-    # TODO: Probably creates overlapping names!
     e_d = mkEntityURI(MINE, e)
+    # if device is not None and domain not in class_to_saref:
     if domain not in class_to_saref:
-        c = SAREF['Device']
+        if device == None:
+            c = HASS[domain.title()]
+        else:
+            # TODO
+            c = SAREF['Device']
     else:
         c = class_to_saref[domain]
         if c == SAREF['Sensor']:  # XXX?
             # Special-casing (business rule):
-            if device_class == "temperature":
+            if device_class == SensorDeviceClass.TEMPERATURE:
                 c = SAREF["TemperatureSensor"]
                 assert attrs['state_class'] == "measurement", attrs
-            elif device_class == "humidity":
+            elif device_class == SensorDeviceClass.HUMIDITY:
                 c = HASS['HumiditySensor']
                 assert attrs['state_class'] == "measurement", attrs
-            elif device_class == "energy":
+            elif device_class == SensorDeviceClass.ENERGY:
                 c = SAREF['Meter']
                 # TODO -- probably we shouldn't be asserting those things.
                 # assert attrs['state_class'] == "total_increasing", attrs
@@ -271,7 +287,7 @@ def handle_entity(HASS, MINE, SAREF, class_to_saref, e, g, master):
         if domain in getServices():
             for service in getServices()[domain]:
                 # Silly mapping, also see below.
-                if service == homeassistant.const.SERVICE_TURN_ON:
+                if service == hc.SERVICE_TURN_ON:
                     s_class = SAREF["SwitchOnService"]
                 else:
                     s_class = HASS[service]
@@ -279,12 +295,12 @@ def handle_entity(HASS, MINE, SAREF, class_to_saref, e, g, master):
                 serviceOffer(MINE, SAREF, e_d, e_name, g, "_" + service, s_class)
 
         # Let's be careful what is MINE and what is in HASS below.
-        if domain == homeassistant.const.Platform.SWITCH:  # TODO: more of those.
+        if domain == hc.Platform.SWITCH:  # TODO: more of those.
             # e_function = MINE[mkname(e_name)+"_function"]  # TODO: name?
             # g.add((e_function, RDF.type, SAREF['OnOffFunction']))
             # g.add((e_d, SAREF['hasFunction'], e_function))
             pass
-        elif domain == "button":
+        elif domain == homeassistant.components.button.DOMAIN:
             pass
         elif domain == "climate":
             # Business rule: https://github.com/home-assistant/core/blob/dev/homeassistant/components/climate/__init__.py#L214
@@ -296,26 +312,26 @@ def handle_entity(HASS, MINE, SAREF, class_to_saref, e, g, master):
             if q is not None:
                 g.add((e_d, RDF.type, HASS['HumiditySensor']))
             # END
-        elif domain == "binary_sensor" or domain == "sensor":  # Handle both types in one for now.
-            # https://github.com/home-assistant/core/blob/dev/homeassistant/components/binary_sensor/__init__.py
+        elif domain == homeassistant.components.binary_sensor.DOMAIN or domain == homeassistant.components.sensor.DOMAIN:  # Handle both types in one for now.
             if device_class is not None:
                 # Patch lower-case names:
                 q = device_class.title()
                 # Let's look it up in the SAREF "master-list":
-                q_o = hasEntity(master, SAREF, q)
+                q_o = hasEntity(master, SAREF, 'Property', q)
                 if q_o is None:
                     eprint(f"INFO: Creating {q}.")
                     q_o = HASS[q]
                     # Create Property...
                     g.add((q_o, RDFS.subClassOf, SAREF['Property']))
                     # ...and instance:
+                # TODO: should this be shared, ie. do we want different sensor measyring the same property?
                 q_prop = MINE[f"{q}_prop"]
                 g.add((q_prop, RDF.type, q_o))
                 g.add((e_d, SAREF['measuresProperty'], q_prop))
             #
             q = attrs['unit_of_measurement'] if 'unit_of_measurement' in attrs else None
             if q is not None:
-                if device_class == SensorDeviceClass.TEMPERATURE:
+                if device_class == SensorDeviceClass.TEMPERATURE:  # TODO - more below
                     unit = SAREF['TemperatureUnit']
                 elif device_class == "current":
                     unit = SAREF['PowerUnit']
@@ -369,15 +385,6 @@ def getEntitiesWODevice():
             yield k
 
 
-def getAutomations():
-    result = session.get(f"{config.hass_url}states")
-    out = {}
-    for k in json.loads(result.text):
-        if k['entity_id'].startswith("automation."):
-            out[k['entity_id']] = k['attributes']
-    return out
-
-
 @cache
 def getServices():
     result = session.get(f"{config.hass_url}services")
@@ -402,11 +409,11 @@ def mkServiceToDomainTable():
 
 
 @cache
-def hasEntity(master, SAREF, q):
+def hasEntity(master, ns, cl, q):
     # TODO: At least we're caching now...but we could precompute a dictionary.
-    for s, _, _ in master.triples((None, RDFS.subClassOf, SAREF['Property'])):
+    for s, _, _ in master.triples((None, RDFS.subClassOf, ns[cl])):
         if s.endswith("/" + q):
-            return SAREF[q]
+            return ns[q]
     return None
 
 
@@ -415,12 +422,22 @@ def setupSAREF():
     SAREF = Namespace("https://saref.etsi.org/core/")
     S4BLDG = Namespace("https://saref.etsi.org/saref4bldg/")
     MINE = Namespace("http://my.name.spc/")
+    MINE_ACTION = Namespace("http://my.name.spc/action/")
+    MINE_AUTOMATION = Namespace("http://my.name.spc/automation/")
+    MINE_ENTITY = Namespace("http://my.name.spc/entity/")
+    MINE_SERVICE = Namespace("http://my.name.spc/service/")
     HASS = Namespace("http://home-assistant.io/")
+    HASS_ACTION = Namespace("http://home-assistant.io/action/")
     g.bind("saref", SAREF)
     g.bind("owl", OWL)
     g.bind("s4bldg", S4BLDG)
     g.bind("mine", MINE)
+    g.bind("action", MINE_ACTION)
+    g.bind("automation", MINE_AUTOMATION)
+    g.bind("entity", MINE_ENTITY)
+    g.bind("service", MINE_SERVICE)
     g.bind("hass", HASS)
+    g.bind("ha_action", HASS_ACTION)
     saref_import = URIRef("http://my.name.spc/")  # Check! MINE?
     g.add((saref_import, RDF.type, OWL.Ontology))
     g.add((saref_import, OWL.imports, URIRef(str(SAREF))))
@@ -442,7 +459,7 @@ def setupSAREF():
     hass_svcs = mkServiceToDomainTable()
     for s, domains in hass_svcs.items():
         # This is weird: SAREF has SwitchOnService -- only:
-        if s == homeassistant.const.SERVICE_TURN_ON:
+        if s == hc.SERVICE_TURN_ON:
             s = "SwitchOnService"
         g.add((HASS[s], RDFS.subClassOf, SAREF['Service']))
         # WIP -- do we want to inject ALL HASS classes below the corresponding SAREF devices?
