@@ -7,6 +7,9 @@ import config
 import homeassistant.core as ha
 import homeassistant.helpers.config_validation as cv
 from homeassistant.components.sensor import SensorDeviceClass
+# Import some constants for later use: obviously this ain't gonna scale!
+from homeassistant.components.binary_sensor.device_trigger import CONF_MOTION, CONF_NO_MOTION
+# from homeassistant.components.deconz.device_trigger import CONF_SHORT_PRESS, CONF_LONG_PRESS
 import homeassistant.components.binary_sensor, homeassistant.components.button, homeassistant.components.sensor
 
 from functools import cache
@@ -65,6 +68,7 @@ def getDeviceEntities(device):
     return getYAML('device_entities("'+device+'")')
 
 
+@cache
 def getDeviceAttr(device, attr):
     return getYAML('device_attr("'+device+'","'+attr+'")')
 
@@ -163,7 +167,7 @@ def main():
             # These have an empty inverse of `consistsOf`
             platform, name = ha.split_entity_id(e['entity_id'])
             if platform == "automation":
-                handleAutomation(HASS, MINE, e['attributes'], name, g)
+                handleAutomation(master, HASS, MINE, e['attributes'], name, g)
             else:
                 handle_entity(HASS, MINE, SAREF, class_to_saref, None, e['entity_id'], g, master)
 
@@ -175,14 +179,15 @@ def main():
     exit(0)
 
 
-def handleAutomation(HASS, MINE, a, a_name, g):
+def handleAutomation(master, HASS, MINE, a, a_name, g):
+    c_trigger = 0
     a_o = MINE["automation/" + mkname(a_name)]
-    g.add((a_o, RDF.type, (HASS['Automation'])))  # Apparently we also subclass Device somewhere else
+    g.add((a_o, RDF.type, (HASS['Automation'])))
     g.add((a_o, HASS['friendly_name'], Literal(a[hc.CONF_FRIENDLY_NAME])))
     # {'id': '1672829613487', 'alias': 'Floorheating BACK', 'description': '', 'trigger': [{'platform': 'time', 'at': 'input_datetime.floorheating_on'}], 'condition': [], 'action': [{'service': 'climate.set_temperature', 'data': {'temperature': 17}, 'target': {'device_id': 'ec5cb183f030a83754c6f402af08420f'}}], 'mode': 'single'}
     result = session.get(f"{config.hass_url}config/automation/config/{a['id']}")
     a_config = result.json()
-    i = 0
+    i = 0  # We'll number the container-elements
     for an_action in a_config['action']:
         # Convert back to its type:
         the_action = cv.determine_script_action(an_action)
@@ -191,6 +196,8 @@ def handleAutomation(HASS, MINE, a, a_name, g):
         # assert cv.script_action(an_action) == an_action, (an_action, cv.script_action(an_action))
         an_action = cv.script_action(an_action)
         # TODO: assert HASS[the_action] already exists since we should have the schema.
+        # But no worky:
+        # assert hasEntity(master, Namespace("http://home-assistant.io/action/"), 'Action', the_action), the_action
         o_action = HASS["action/" + the_action]
         o_action_instance = MINE["action/" + mkname(a_name) + "_" + str(i)]
         g.add((o_action_instance, RDF.type, o_action))
@@ -223,13 +230,48 @@ def handleAutomation(HASS, MINE, a, a_name, g):
             # The JSON also carries a `domain` which is most likely derived.
         elif the_action == cv.SCRIPT_ACTION_DELAY:
             g.add((o_action_instance, HASS['target']  # or what?
-                   , Literal(f"TODO: {str(an_action)}")))
+                   , Literal(str(cv.time_period(an_action[cv.CONF_DELAY])))))
         else:
-            eprint(the_action + ":" + str(an_action))
-            exit(2)
+            eprint("WARN: Skipping action "+the_action + ":" + str(an_action))
         # TODO: populate schema by action type
         # `action`s are governed by: https://github.com/home-assistant/core/blob/31a787558fd312331b55e5c2c4b33341fc3601fc/homeassistant/helpers/script.py#L270
         # After that it's following the `_SCHEMA`
+    for a_trigger in a_config['trigger']:
+        for t in cv.TRIGGER_SCHEMA(a_trigger):
+            c_trigger = c_trigger+1
+            if t['platform'] == "device":
+                o_trigger = MINE["trigger/"+a_name+str(c_trigger)]
+                name = getDeviceAttr(t['device_id'], "name")
+                name_by_user = getDeviceAttr(t['device_id'], "name_by_user")
+                trigger_device = MINE[mkname(name if name_by_user == "None" else name_by_user)]
+                trigger_type = HASS["type/" + t['type']]  # TODO: static? May not be possible/effective,
+                # ...since there's no global super-container? This must be INSIDE Homeassistant!
+                # What I don't know is if the triggers etc. are installed even though you're not using the integration...
+                g.add((trigger_type, RDFS.subClassOf, HASS["type/TriggerType"]))
+                # This code below does not scale:
+                if t['type'] == CONF_MOTION or t['type'] == CONF_NO_MOTION:
+                    attrs = getAttributes(t['entity_id'])
+                    d_class = attrs['device_class'] if 'device_class' in attrs else None
+                    assert d_class == "motion", d_class
+                    trigger_entity = mkEntityURI(MINE, t['entity_id'])
+                    g.add((o_trigger, HASS['trigger_device'], trigger_device))
+                    g.add((o_trigger, HASS['trigger_entity'], trigger_entity))
+                elif t['type'] == "remote_button_short_press" or t['type'] == "remote_button_long_press":
+                    # This is coming from deconz, and fat chance that we will be transcribing all of this by hand!
+                    g.add((o_trigger, HASS['device'], trigger_device))
+                else:
+                    eprint(f"WARN: not handling trigger {t} yet.")
+                    pass
+                g.add((o_trigger, RDF.type, trigger_type))
+                g.add((o_action_instance, HASS['hasTrigger'], o_trigger))
+
+            else:
+                pass
+        pass  # TODO
+    for a_condition in a_config['condition']:
+        for c in cv.CONDITION_SCHEMA(a_condition):
+            pass
+        pass  # TODO
 
 
 def mkServiceURI(MINE, SAREF, service_id):
@@ -411,6 +453,7 @@ def mkServiceToDomainTable():
 @cache
 def hasEntity(master, ns, cl, q):
     # TODO: At least we're caching now...but we could precompute a dictionary.
+    # Can't search in e.g. HA_ACTION?
     for s, _, _ in master.triples((None, RDFS.subClassOf, ns[cl])):
         if s.endswith("/" + q):
             return ns[q]
@@ -474,9 +517,9 @@ def setupSAREF():
 
     # BEGIN SCHEMA metadata, reflection on
     #  https://github.com/home-assistant/core/blob/9f7fd8956f22bd873d14ae89460cdffe6ef6f85d/homeassistant/helpers/config_validation.py#L1641
-    ha_action = HASS['Action']
+    ha_action = HASS['action/Action']
     for k, v in cv.ACTION_TYPE_SCHEMAS.items():
-        g.add((HASS[k], RDFS.subClassOf, ha_action))
+        g.add((HASS["action/"+k], RDFS.subClassOf, ha_action))
     # END
 
     # TODO: Export HASS schema as separate file and import in model, instead of having it in the graph. (#5)
