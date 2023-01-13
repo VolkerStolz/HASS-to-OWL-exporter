@@ -43,7 +43,7 @@ def mkLocationURI(MINE, l_name):
 # - escape "/" in names!
 
 def main():
-    Svcs, g, MINE, HASS, SAREF, S4BLDG = setupSAREF()
+    g, MINE, HASS, SAREF, S4BLDG = setupSAREF()
     # Load known types:
     master = Graph()
     master.parse("https://saref.etsi.org/core/v3.1.1/saref.ttl")
@@ -97,7 +97,7 @@ def main():
             # Matches construction of d_g above:
             other = mkDevice(MINE, via)
             eprint(f"INFO: Found via({d},{via})")
-            g.add(d_g, HASS['via_device'], other)
+            g.add((d_g, HASS['via_device'], other))
         # END via_device
 
         es = cs.getDeviceEntities(d)
@@ -196,8 +196,8 @@ def handleAutomation(master, HASS, MINE, a, a_name, g):
             g.add((o_action_instance, HASS['target'], MINE["service/" + name]))
             # The JSON also carries a `domain` which is most likely derived.
         elif the_action == cv.SCRIPT_ACTION_DELAY:
-            g.add((o_action_instance, HASS['target']  # or what?
-                   , Literal(str(cv.time_period(an_action[cv.CONF_DELAY])))))
+            g.add((o_action_instance, HASS['target'],  # or what?
+                   Literal(str(cv.time_period(an_action[cv.CONF_DELAY])))))
         else:
             eprint("WARN: Skipping action "+the_action + ":" + str(an_action))
         # TODO: populate schema by action type
@@ -206,7 +206,7 @@ def handleAutomation(master, HASS, MINE, a, a_name, g):
     for a_trigger in a_config['trigger']:
         for t in cv.TRIGGER_SCHEMA(a_trigger):
             c_trigger = c_trigger+1
-            if t[cv.CONF_PLATFORM] == "device":
+            if t[cv.CONF_PLATFORM] == "device":  # zha.device_trigger.DEVICE -- which we can't import
                 o_trigger = MINE["trigger/"+a_name+str(c_trigger)]
                 trigger_device = mkDevice(MINE, t['device_id'])
                 trigger_type = HASS["type/" + t['type']]  # TODO: static? May not be possible/effective,
@@ -214,7 +214,7 @@ def handleAutomation(master, HASS, MINE, a, a_name, g):
                 # What I don't know is if the triggers etc. are installed even though you're not using the integration...
                 g.add((trigger_type, RDFS.subClassOf, HASS["type/TriggerType"]))
                 # This code below does not scale:
-                if t['type'] == CONF_MOTION or t['type'] == CONF_NO_MOTION:
+                if t[hc.CONF_TYPE] == CONF_MOTION or t[hc.CONF_TYPE] == CONF_NO_MOTION:
                     attrs = cs.getAttributes(t['entity_id'])
                     d_class = attrs['device_class'] if 'device_class' in attrs else None
                     assert d_class == "motion", d_class
@@ -223,13 +223,14 @@ def handleAutomation(master, HASS, MINE, a, a_name, g):
                     assert cs.getDeviceId(t['entity_id']) == t['device_id'], t
                     g.add((o_trigger, HASS['trigger_device'], trigger_device))
                     g.add((o_trigger, HASS['trigger_entity'], trigger_entity))
-                elif t['type'] == "remote_button_short_press" or t['type'] == "remote_button_long_press":
+                elif t[hc.CONF_TYPE] == "remote_button_short_press" or t['type'] == "remote_button_long_press":
                     # This is coming from deconz, and fat chance that we will be transcribing all of this by hand!
                     g.add((o_trigger, HASS['device'], trigger_device))
                 else:
                     eprint(f"WARN: not handling trigger {t} yet.")
                     pass
                 g.add((o_trigger, RDF.type, trigger_type))
+                # TODO: investigate warning on line below
                 g.add((o_action_instance, HASS['hasTrigger'], o_trigger))
             else:
                 eprint(f"WARN: not handling trigger platform {t[cv.CONF_PLATFORM]}.")
@@ -279,7 +280,7 @@ def handle_entity(HASS, MINE, SAREF, class_to_saref, device, e, g, master):
     e_d = mkEntityURI(MINE, e)
     # if device is not None and domain not in class_to_saref:
     if domain not in class_to_saref:
-        if device == None:
+        if device is None:
             c = HASS[domain.title()]
         else:
             # TODO
@@ -421,7 +422,7 @@ def mkServiceToDomainTable():
                 t.add(component_name)
                 hass_svcs[s] = t
             else:
-                hass_svcs[s] = set([component_name])
+                hass_svcs[s] = {component_name}
     return hass_svcs
 
 
@@ -492,6 +493,14 @@ def setupSAREF():
     g.add((HASS[hc.Platform.BUTTON], RDFS.subClassOf, SAREF['Actuator']))
     # END
 
+    # Proper HASS-contribution to SAREF:
+    # TODO: Review with Fernando -- we could introduce HASS['Entity'] and double-type.
+    prop = HASS['via_device']
+    g.add((prop, RDF.type, OWL.ObjectProperty))
+    g.add((prop, RDFS.domain, SAREF['Device']))
+    g.add((prop, RDFS.range, SAREF['Device']))
+    #
+
     # BEGIN SCHEMA metadata, reflection on
     #  https://github.com/home-assistant/core/blob/9f7fd8956f22bd873d14ae89460cdffe6ef6f85d/homeassistant/helpers/config_validation.py#L1641
     ha_action = HASS['action/Action']
@@ -522,7 +531,7 @@ def setupSAREF():
 
     # TODO: Export HASS schema as separate file and import in model, instead of having it in the graph. (#5)
     # TODO: Should probably be in a class...
-    return hass_svcs, g, MINE, HASS, SAREF, S4BLDG
+    return g, MINE, HASS, SAREF, S4BLDG
 
 
 if __name__ == "__main__":
