@@ -8,6 +8,10 @@ hass_token = "..."
 ```
 2. Run `hacvt.py`, grab generated file and import e.g. into Protégé. You may need to tweak the filename in the code.
 
+# Development tips
+
+* `git clone git@github.com:home-assistant/core.git`, which is easier to browse than the package import.
+
 # To-Dos
 
 * Some part of the HASS-profile (e.g. Services) is now generated statically on startup.
