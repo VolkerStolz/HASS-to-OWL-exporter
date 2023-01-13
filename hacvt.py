@@ -7,6 +7,9 @@ import config
 import homeassistant.core as ha
 import homeassistant.helpers.config_validation as cv
 from homeassistant.components.sensor import SensorDeviceClass
+from homeassistant.components import (
+    climate
+)
 # Import some constants for later use: obviously this ain't gonna scale!
 from homeassistant.components.binary_sensor.device_trigger import CONF_MOTION, CONF_NO_MOTION
 # from homeassistant.components.deconz.device_trigger import CONF_SHORT_PRESS, CONF_LONG_PRESS
@@ -166,6 +169,7 @@ def main():
         for e in getEntitiesWODevice():
             # These have an empty inverse of `consistsOf`
             platform, name = ha.split_entity_id(e['entity_id'])
+            # Not a constant?
             if platform == "automation":
                 handleAutomation(master, HASS, MINE, e['attributes'], name, g)
             else:
@@ -188,7 +192,7 @@ def mkDevice(MINE, device_id):
 def handleAutomation(master, HASS, MINE, a, a_name, g):
     c_trigger = 0
     a_o = MINE["automation/" + mkname(a_name)]
-    g.add((a_o, RDF.type, (HASS['Automation'])))
+    g.add((a_o, RDF.type, HASS['Automation']))
     g.add((a_o, HASS['friendly_name'], Literal(a[hc.ATTR_FRIENDLY_NAME])))
     # {'id': '1672829613487', 'alias': 'Floorheating BACK', 'description': '', 'trigger': [{'platform': 'time', 'at': 'input_datetime.floorheating_on'}], 'condition': [], 'action': [{'service': 'climate.set_temperature', 'data': {'temperature': 17}, 'target': {'device_id': 'ec5cb183f030a83754c6f402af08420f'}}], 'mode': 'single'}
     result = session.get(f"{config.hass_url}config/automation/config/{a['id']}")
@@ -204,10 +208,10 @@ def handleAutomation(master, HASS, MINE, a, a_name, g):
         # TODO: assert HASS[the_action] already exists since we should have the schema.
         # But no worky:
         # assert hasEntity(master, Namespace("http://home-assistant.io/action/"), 'Action', the_action), the_action
-        o_action = HASS["action/" + the_action]
+        o_action = HASS["action/" + the_action.title()]
         o_action_instance = MINE["action/" + mkname(a_name) + "_" + str(i)]
         g.add((o_action_instance, RDF.type, o_action))
-        g.add((a_o, HASS['consistsOf'], o_action_instance))  # TODO: create multiplicity in schema
+        g.add((a_o, HASS['consistsOf'], o_action_instance))  # TODO: XXX create multiplicity in schema
         i = i + 1
         if the_action == cv.SCRIPT_ACTION_CALL_SERVICE:
             # TODO: use schema in Python...SERVICE_SCHEMA
@@ -347,6 +351,11 @@ def handle_entity(HASS, MINE, SAREF, class_to_saref, device, e, g, master):
         # https://github.com/home-assistant/core/blob/dev/homeassistant/helpers/entity_registry.py
 
         g.add((e_d, RDF.type, c))
+        # We're creating this reference to maybe analyse the mapping to SAREF later.
+        #  Maybe the name or NS should be more outstanding? The interesting cases are
+        # where the type is in HA and not a trivial subclass of SAREF:Device, or where
+        # multiple platforms are projected onto the same SAREF Device.
+        g.add((e_d, HASS['provided_by'], HASS['platform/'+domain.title()]))
 
         # Look up services this domain should have, and create them for this entity.
         if domain in getServices():
@@ -371,10 +380,10 @@ def handle_entity(HASS, MINE, SAREF, class_to_saref, device, e, g, master):
         elif domain == hc.Platform.CLIMATE:
             # Business rule: https://github.com/home-assistant/core/blob/dev/homeassistant/components/climate/__init__.py#L214
             # Are we delivering temperature readings, e.g. an HVAC?
-            q = attrs['current_temperature'] if 'current_temperature' in attrs else None
+            q = attrs[climate.ATTR_CURRENT_TEMPERATURE] if 'current_temperature' in attrs else None
             if q is not None:
                 g.add((e_d, RDF.type, SAREF['TemperatureSensor']))
-            q = attrs['current_humidity'] if 'current_humidity' in attrs else None
+            q = attrs[climate.ATTR_CURRENT_HUMIDITY] if 'current_humidity' in attrs else None
             if q is not None:
                 g.add((e_d, RDF.type, HASS['HumiditySensor']))
             # END
@@ -395,22 +404,23 @@ def handle_entity(HASS, MINE, SAREF, class_to_saref, device, e, g, master):
                         # Create Property...
                         g.add((q_o, RDFS.subClassOf, SAREF['Property']))
                 # ...and instance:
-                # TODO: should this be shared, ie. do we want different sensor measyring the same property?
+                # TODO: should this be shared, ie. do we want different sensor measuring the same property?
                 q_prop = MINE[f"{q}_prop"]
                 g.add((q_prop, RDF.type, q_o))
                 g.add((e_d, SAREF['measuresProperty'], q_prop))
             #
             q = attrs['unit_of_measurement'] if 'unit_of_measurement' in attrs else None
             if q is not None:
-                if device_class == SensorDeviceClass.TEMPERATURE:  # TODO - more below
+                # TODO - more below. When is this complete? When we've either exhausted SAREF or HASS.
+                if device_class == SensorDeviceClass.TEMPERATURE:
                     unit = SAREF['TemperatureUnit']
-                elif device_class == "current":
+                elif device_class == SensorDeviceClass.CURRENT:
                     unit = SAREF['PowerUnit']
-                elif device_class == "power":
+                elif device_class == SensorDeviceClass.POWER:
                     unit = SAREF['PowerUnit']
-                elif device_class == "energy":
+                elif device_class == SensorDeviceClass.ENERGY:
                     unit = SAREF['EnergyUnit']
-                elif device_class == "pressure":
+                elif device_class == SensorDeviceClass.PRESSURE:
                     unit = SAREF['PressureUnit']
                 else:  # Not built-in.
                     if q == "mbar":  # WIP
@@ -428,7 +438,7 @@ def handle_entity(HASS, MINE, SAREF, class_to_saref, device, e, g, master):
                 # TODO: XXX Nope, we're not measuring, we're setting!?
                 g.add((e_d, SAREF['measuresProperty'], brightness_prop))
         else:
-            eprint(f"WARN: not handling platform {domain}.")
+            eprint(f"WARN: not really handling platform {domain}.")
     return e_d
 
 
@@ -551,15 +561,29 @@ def setupSAREF():
     # BEGIN SCHEMA metadata, reflection on
     #  https://github.com/home-assistant/core/blob/9f7fd8956f22bd873d14ae89460cdffe6ef6f85d/homeassistant/helpers/config_validation.py#L1641
     ha_action = HASS['action/Action']
+    # Automation consistsOf (order) Actions
+    h_prov = HASS['consistsOf']
+    g.add((h_prov, RDF.type, OWL.ObjectProperty))
+    g.add((h_prov, OWL.inverseOf, HASS['belongsTo']))
+    g.add((h_prov, RDFS.domain, HASS['Automation']))
+    g.add((h_prov, RDFS.range, ha_action))
     for k, v in cv.ACTION_TYPE_SCHEMAS.items():
-        g.add((HASS["action/"+k], RDFS.subClassOf, ha_action))
+        g.add((HASS["action/"+k.title()], RDFS.subClassOf, ha_action))
     # END
 
     # Model platforms -- unclear if we'll really need this in the future,
     #  but useful for i) a complete metamodel ii) for cross-referencing.
     ha_platform = HASS['platform/Platform']
+    h_prov = HASS['provided_by']
+    g.add((h_prov, RDF.type, OWL.ObjectProperty))
+    g.add((h_prov, OWL.inverseOf, HASS['provides']))
+    # Actually, a HASS-entity! REVIEW, must be subclass of saref:device in hass-ns!
+    # TODO: Talk with Fernando about this.
+    g.add((h_prov, RDFS.domain, SAREF['Device']))
+    g.add((h_prov, RDFS.range, ha_platform))
+
     for p in hc.Platform:
-        g.add((HASS['platform/'+p], RDFS.subClassOf, ha_platform))
+        g.add((HASS['platform/'+p.title()], RDF.type, ha_platform))
     # END
 
     # TODO: Export HASS schema as separate file and import in model, instead of having it in the graph. (#5)
