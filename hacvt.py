@@ -1,9 +1,5 @@
-import json
-import re
-
 import homeassistant.const as hc
 
-import config
 import homeassistant.core as ha
 import homeassistant.helpers.config_validation as cv
 from homeassistant.components.sensor import SensorDeviceClass
@@ -17,9 +13,11 @@ from homeassistant.components.binary_sensor.device_trigger import CONF_MOTION, C
 from functools import cache
 from rdflib import Literal, Graph, URIRef
 from rdflib.namespace import Namespace, RDF, RDFS, OWL
-import requests_cache
 import sys
-import yaml
+
+from ConfigSource import RESTSource
+
+cs = RESTSource()
 
 
 def eprint(*args, **kwargs):
@@ -39,45 +37,6 @@ def mkEntityURI(MINE, entity_id):
 
 def mkLocationURI(MINE, l_name):
     return MINE["location/"+mkname(l_name)]
-
-
-# In config: hass_url = "http://dehvl.local:8123/api/"
-
-session = requests_cache.CachedSession('my_cache')
-session.headers = {'Content-type': 'application/json', 'Authorization': 'Bearer ' + config.hass_token}
-
-
-def getYAML(query):
-    http_data = {'template': '{{ '+query+' }}'}
-    j_response = session.post(config.hass_url+"template", json=http_data)
-    assert j_response.status_code == 200, f"YAML request failed: " + str(j_response.text)
-    return yaml.safe_load(j_response.text)
-
-
-def getTextQuery(query):
-    # Unused
-    http_data = {'template': '{{ '+query+' }}'}
-    j_response = session.post(config.hass_url+"template", json=http_data)
-    assert j_response.status_code == 200, f"JSON request failed: " + str(j_response.text)
-    return j_response.text
-
-
-def getDevices():
-    return getYAML('states | map(attribute="entity_id")|map("device_id") | unique | reject("eq",None) | list')
-
-
-def getDeviceEntities(device):
-    return getYAML('device_entities("'+device+'")')
-
-
-@cache
-def getDeviceAttr(device, attr):
-    return getYAML('device_attr("'+device+'","'+attr+'")')
-
-
-@cache
-def getDeviceId(entity):
-    return getYAML(f'device_id("{entity}")')
 
 
 # TODOs
@@ -104,17 +63,17 @@ def main():
         , "number": None  # SERVICE_SET_VALUE
     }
 
-    the_devices = getDevices()
+    the_devices = cs.getDevices()
     for d in the_devices:
         # https://github.com/home-assistant/core/blob/dev/homeassistant/helpers/device_registry.py
         # For these we don't have constants.
         # TODO: table-based conversion, manufacturer -> hasManufacturer,
         #  maybe with lambdas for transformation?
-        manufacturer = getDeviceAttr(d, hc.ATTR_MANUFACTURER)
-        name = getDeviceAttr(d, hc.ATTR_NAME)
-        model = getDeviceAttr(d, hc.ATTR_MODEL)
+        manufacturer = cs.getDeviceAttr(d, hc.ATTR_MANUFACTURER)
+        name = cs.getDeviceAttr(d, hc.ATTR_NAME)
+        model = cs.getDeviceAttr(d, hc.ATTR_MODEL)
         # O'sama denn hier? TODO.
-        entry_type = getDeviceAttr(d, 'entry_type')
+        entry_type = cs.getDeviceAttr(d, 'entry_type')
         if not entry_type == "None":
             eprint(f"INFO: Found {d} {name} as: {entry_type}")
 
@@ -125,7 +84,7 @@ def main():
 
         # Handle 'Area' of devices. May be None.
         # TODO: Entities can override this individually.
-        d_area = getYAML(f'area_id("{d}")')
+        d_area = cs.getYAML(f'area_id("{d}")')
         if not d_area == "None":  # Careful, string!
             area = mkLocationURI(MINE, d_area)
             g.add((area, RDF.type, S4BLDG['BuildingSpace']))
@@ -133,7 +92,7 @@ def main():
         # END Area
 
         # Handle `via_device` if present.
-        via = getDeviceAttr(d, 'via_device')
+        via = cs.getDeviceAttr(d, 'via_device')
         if via != "None":
             # Matches construction of d_g above:
             other = mkDevice(MINE, via)
@@ -141,7 +100,7 @@ def main():
             g.add(d_g, HASS['via_device'], other)
         # END via_device
 
-        es = getDeviceEntities(d)
+        es = cs.getDeviceEntities(d)
 
         if len(es) == 0:
             eprint(f"WARN: Device {name} does not have any entities?!")
@@ -184,8 +143,8 @@ def main():
 
 
 def mkDevice(MINE, device_id):
-    d2_name = getDeviceAttr(device_id, 'name')
-    d2_name_by_user = getDeviceAttr(device_id, 'name_by_user')
+    d2_name = cs.getDeviceAttr(device_id, 'name')
+    d2_name_by_user = cs.getDeviceAttr(device_id, 'name_by_user')
     return MINE[mkname(d2_name if d2_name_by_user == "None" else d2_name_by_user)]
 
 
@@ -195,8 +154,7 @@ def handleAutomation(master, HASS, MINE, a, a_name, g):
     g.add((a_o, RDF.type, HASS['Automation']))
     g.add((a_o, HASS['friendly_name'], Literal(a[hc.ATTR_FRIENDLY_NAME])))
     # {'id': '1672829613487', 'alias': 'Floorheating BACK', 'description': '', 'trigger': [{'platform': 'time', 'at': 'input_datetime.floorheating_on'}], 'condition': [], 'action': [{'service': 'climate.set_temperature', 'data': {'temperature': 17}, 'target': {'device_id': 'ec5cb183f030a83754c6f402af08420f'}}], 'mode': 'single'}
-    result = session.get(f"{config.hass_url}config/automation/config/{a['id']}")
-    a_config = result.json()
+    a_config = cs.getAutomationConfig(a['id'])
     i = 0  # We'll number the container-elements
     for an_action in a_config['action']:
         # Convert back to its type:
@@ -257,12 +215,12 @@ def handleAutomation(master, HASS, MINE, a, a_name, g):
                 g.add((trigger_type, RDFS.subClassOf, HASS["type/TriggerType"]))
                 # This code below does not scale:
                 if t['type'] == CONF_MOTION or t['type'] == CONF_NO_MOTION:
-                    attrs = getAttributes(t['entity_id'])
+                    attrs = cs.getAttributes(t['entity_id'])
                     d_class = attrs['device_class'] if 'device_class' in attrs else None
                     assert d_class == "motion", d_class
                     trigger_entity = mkEntityURI(MINE, t['entity_id'])
                     # TODO: Wait, why both? Is `device` redundant if you have entity?
-                    assert getDeviceId(t['entity_id']) == t['device_id'], t
+                    assert cs.getDeviceId(t['entity_id']) == t['device_id'], t
                     g.add((o_trigger, HASS['trigger_device'], trigger_device))
                     g.add((o_trigger, HASS['trigger_entity'], trigger_entity))
                 elif t['type'] == "remote_button_short_press" or t['type'] == "remote_button_long_press":
@@ -316,7 +274,7 @@ def handle_entity(HASS, MINE, SAREF, class_to_saref, device, e, g, master):
     # Experimental section:
     # e_friendly_name = getYAML(f'state_attr("{e}", "friendly_name")')
     # END
-    attrs = getAttributes(e)
+    attrs = cs.getAttributes(e)
     device_class = attrs['device_class'] if 'device_class' in attrs else None
     e_d = mkEntityURI(MINE, e)
     # if device is not None and domain not in class_to_saref:
@@ -358,8 +316,8 @@ def handle_entity(HASS, MINE, SAREF, class_to_saref, device, e, g, master):
         g.add((e_d, HASS['provided_by'], HASS['platform/'+domain.title()]))
 
         # Look up services this domain should have, and create them for this entity.
-        if domain in getServices():
-            for service in getServices()[domain]:
+        if domain in cs.getServices():
+            for service in cs.getServices()[domain]:
                 # Silly mapping, also see below.
                 if service == hc.SERVICE_TURN_ON:
                     s_class = SAREF["SwitchOnService"]
@@ -448,39 +406,15 @@ def serviceOffer(MINE, SAREF, e_d, e_name, g, suffix, svc_obj):
     g.add((e_d, SAREF['offers'], e_service_inst))
 
 
-@cache
-def getAttributes(e):
-    # TODO: could bounce through cached getStates() now.
-    result = session.get(f"{config.hass_url}states/{e}")
-    j = json.loads(result.text)
-    return j['attributes'] if 'attributes' in j else []
-
-
-@cache
-def getStates():
-    result = session.get(f"{config.hass_url}states")
-    return result.json()
-
-
 def getEntitiesWODevice():
-    for k in getStates():
+    for k in cs.getStates():
         if 'device_id' not in k:
             yield k
 
 
-@cache
-def getServices():
-    result = session.get(f"{config.hass_url}services")
-    assert result.status_code == 200, (result.status_code, result.text)
-    out = {}
-    for k in json.loads(result.text):
-        out[k['domain']] = k['services']
-    return out
-
-
 def mkServiceToDomainTable():
     hass_svcs = {}
-    for component_name, svc_services in getServices().items():
+    for component_name, svc_services in cs.getServices().items():
         for s in svc_services:
             if s in hass_svcs:
                 t = hass_svcs[s]
