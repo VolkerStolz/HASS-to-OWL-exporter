@@ -1,7 +1,4 @@
-from typing import Optional
-
 import homeassistant.const as hc
-
 import homeassistant.core as ha
 import homeassistant.helpers.config_validation as cv
 from homeassistant.components.sensor import SensorDeviceClass
@@ -14,21 +11,40 @@ from homeassistant.components.binary_sensor.device_trigger import CONF_MOTION, C
 # from homeassistant.components.deconz.device_trigger import CONF_SHORT_PRESS, CONF_LONG_PRESS
 
 from functools import cache
+import logging
 from rdflib import Literal, Graph, URIRef
 from rdflib.namespace import Namespace, RDF, RDFS, OWL
-import sys
+from typing import Optional
 
 from ConfigSource import RESTSource
 
-import logging
-
 logging.basicConfig(level='INFO', format='%(levelname)s: %(message)s')
 
-cs = RESTSource()
+cs = RESTSource()  # Use REST API. Configure `config.py`!
 
+# BEGIN Privacy settings:
+p_counter = 0  # Used to enumerate privatized entity names
+# Adjust the following to preserve device/entity names. We first take the default platforms,
+# then some common ones. Set to privacy_filter to None to disable. The code-layout here should make it
+# easy to comment out/in individual items.
+privacy_filter = set(list(hc.Platform))
+# Identifier for devices in your system:
+privacy_filter.add("device")
+# Useful components that we usually want exported that are not part of home-assistant's core:
+for p in {"climate", "input_datetime", "sun", "time"}:
+    privacy_filter.add(p)
+# Common things that you may want to adjust to keep them private and that are not part of the based platforms:
+privacy_filter.discard("device_tracker")    # Anonymize your mobile devices if you use the app.
+# privacy_filter.add("person")              # Export our accounts in home-assistant.
+privacy_filter.add("area")                  # Export your self-defined area-names...
+privacy_filter.add("zone")                  #  ... and zones.
+# Final switch to export everything unfiltered, overriding anything above:
+privacy_filter = None
 
-def eprint(*args, **kwargs):
-    print(*args, file=sys.stderr, **kwargs)
+# Log what we're doing:
+msg = "ALL" if privacy_filter is None else str(privacy_filter)
+logging.info(f"Preserving entities: {msg}")
+# END Privacy settings
 
 
 def mkname(name):
@@ -38,19 +54,29 @@ def mkname(name):
 
 
 def mkEntityURI(MINE, entity_id):
+    global p_counter
     # TODO: Not sure what we want to assume here for uniqueness...
     # Protégé uses the URI the render the name, alternatively we could put
     #  the friendly name into an attribute, but then we won't see it in the UI.
     e_platform, e_name = ha.split_entity_id(entity_id)
-    try:
-        e_name = cs.getAttributes(entity_id)['hc.ATTR_FRIENDLY_NAME']
-    except KeyError:
-        pass
-    return MINE["entity/"+e_platform+"_"+mkname(e_name)]
+    # we use a white-list:
+    if privacy_filter is not None and e_platform not in privacy_filter:
+        e_name = "entity_"+str(p_counter)
+        p_counter = p_counter + 1
+    else:
+        try:
+            e_name = cs.getAttributes(entity_id)['hc.ATTR_FRIENDLY_NAME']
+        except KeyError:
+            pass
+    return MINE["entity/"+e_platform+"_"+mkname(e_name)], e_name
 
 
-def mkLocationURI(MINE, l_name):
-    return MINE["location/"+mkname(l_name)]
+def mkLocationURI(MINE, name):
+    global p_counter
+    if privacy_filter is not None and "area" not in privacy_filter:
+        name = "entity_"+str(p_counter)
+        p_counter = p_counter + 1
+    return MINE["area/"+mkname(name)]
 
 
 # TODOs
@@ -155,8 +181,14 @@ def main():
 
 
 def mkDevice(MINE, device_id):
+    global p_counter
     d2_name = cs.getDeviceAttr(device_id, 'name')
-    d2_name_by_user = cs.getDeviceAttr(device_id, 'name_by_user')
+    d2_name_by_user = "None"
+    if privacy_filter is not None and "device" not in privacy_filter:
+        d2_name = "device_"+str(p_counter)
+        p_counter = p_counter+1
+    else:
+        d2_name_by_user = cs.getDeviceAttr(device_id, 'name_by_user')
     return MINE[mkname(d2_name if d2_name_by_user == "None" else d2_name_by_user)]
 
 
@@ -232,7 +264,7 @@ def handleAutomation(master, HASS, MINE, a, a_name, g):
                     attrs = cs.getAttributes(t['entity_id'])
                     d_class = attrs['device_class'] if 'device_class' in attrs else None
                     assert d_class == "motion", d_class
-                    trigger_entity = mkEntityURI(MINE, t['entity_id'])
+                    trigger_entity, _ = mkEntityURI(MINE, t['entity_id'])
                     # TODO: Wait, why both? Is `device` redundant if you have entity?
                     assert cs.getDeviceId(t['entity_id']) == t['device_id'], t
                     # g.add((o_trigger, HASS['trigger_device'], trigger_device))
@@ -270,7 +302,7 @@ def process_target_schema(HASS, MINE, g, o_action_instance, service_id, target):
     if cv.ATTR_AREA_ID in target:
         # untested:
         for a in target[cv.ATTR_AREA_ID]:
-            target_area = MINE["location/" + a]
+            target_area = mkLocationURI(MINE, a)
             g.add((o_action_instance, HASS['target'], target_area))
 
 
@@ -284,7 +316,7 @@ def mkServiceURI(MINE, SAREF, service_id):
 
 
 def handle_entity(HASS, MINE, SAREF, class_to_saref, device: Optional[str], e, g, master):
-    logging.info(f"Handling {e}.")
+    logging.info(f"Handling {e} for device {device}.")
     assert e.count('.') == 1
     (domain, e_name) = ha.split_entity_id(e)
     # Experimental section:
@@ -292,7 +324,7 @@ def handle_entity(HASS, MINE, SAREF, class_to_saref, device: Optional[str], e, g
     # END
     attrs = cs.getAttributes(e)
     device_class = attrs['device_class'] if 'device_class' in attrs else None
-    e_d = mkEntityURI(MINE, e)
+    e_d, e_name = mkEntityURI(MINE, e)
     # if device is not None and domain not in class_to_saref:
     if domain not in class_to_saref:
         if device is None:
@@ -431,7 +463,8 @@ def serviceOffer(MINE, SAREF, e_d, e_name, g, suffix, svc_obj):
 
 def getEntitiesWODevice():
     for k in cs.getStates():
-        if 'device_id' not in k:
+        # Weird...you'd think they'd care 'device_id' around, but they don't:
+        if cs.getDeviceId(k['entity_id']) == 'None':
             yield k
 
 
