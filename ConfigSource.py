@@ -12,22 +12,20 @@ class ConfigSource:
 
 
 class RESTSource(ConfigSource):
-    # In config.py: hass_url = "http://dehvl.local:8123/api/"
+    # In config.py: hass_url = "http://your.home:8123/api/"
     session = requests_cache.CachedSession('my_cache')
-    session.headers = {'Content-type': 'application/json', 'Authorization': 'Bearer ' + config.hass_token}
+    session.headers = {'Content-type': 'application/json',
+                       'Authorization': 'Bearer ' + config.hass_token,
+                       'User-Agent': 'HOWL-exporter/0.1 vs+howl@foldr.org'
+                       }
+    # Set on-demand. TODO: Should be in `config.py`.
+    # session.verify = False
 
     def getYAML(self, query):
         http_data = {'template': '{{ '+query+' }}'}
         j_response = self.session.post(config.hass_url+"template", json=http_data)
         assert j_response.status_code == 200, f"YAML request failed: " + str(j_response.text)
         return yaml.safe_load(j_response.text)
-
-    def getTextQuery(self, query):
-        # Unused
-        http_data = {'template': '{{ ' + query + ' }}'}
-        j_response = self.session.post(config.hass_url + "template", json=http_data)
-        assert j_response.status_code == 200, f"JSON request failed: " + str(j_response.text)
-        return j_response.text
 
     def getDevices(self):
         return self.getYAML('states | map(attribute="entity_id")|map("device_id") | unique | reject("eq",None) | list')
