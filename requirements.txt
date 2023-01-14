@@ -1,3 +1,4 @@
+forcediphttpsadapter
 homeassistant~=2022.12.7
 PyYAML
 requests

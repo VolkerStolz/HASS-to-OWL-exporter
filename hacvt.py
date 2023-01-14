@@ -17,6 +17,10 @@ import sys
 
 from ConfigSource import RESTSource
 
+import logging
+
+# logging.basicConfig(level='DEBUG')
+
 cs = RESTSource()
 
 
@@ -221,7 +225,7 @@ def handleAutomation(master, HASS, MINE, a, a_name, g):
                     trigger_entity = mkEntityURI(MINE, t['entity_id'])
                     # TODO: Wait, why both? Is `device` redundant if you have entity?
                     assert cs.getDeviceId(t['entity_id']) == t['device_id'], t
-                    g.add((o_trigger, HASS['trigger_device'], trigger_device))
+                    # g.add((o_trigger, HASS['trigger_device'], trigger_device))
                     g.add((o_trigger, HASS['trigger_entity'], trigger_entity))
                 elif t[hc.CONF_TYPE] == "remote_button_short_press" or t['type'] == "remote_button_long_press":
                     # This is coming from deconz, and fat chance that we will be transcribing all of this by hand!
@@ -233,7 +237,7 @@ def handleAutomation(master, HASS, MINE, a, a_name, g):
                 # TODO: investigate warning on line below
                 g.add((o_action_instance, HASS['hasTrigger'], o_trigger))
             else:
-                eprint(f"WARN: not handling trigger platform {t[cv.CONF_PLATFORM]}.")
+                eprint(f"WARN: not handling trigger platform {t[cv.CONF_PLATFORM]}: {t}.")
     for a_condition in a_config['condition']:
         for c in cv.CONDITION_SCHEMA(a_condition):
             pass  # TODO
@@ -513,6 +517,12 @@ def setupSAREF():
     for k, v in cv.ACTION_TYPE_SCHEMAS.items():
         g.add((HASS["action/"+k.title()], RDFS.subClassOf, ha_action))
     # END
+
+    tt = HASS["type/TriggerType"]
+    prop_has_trigger = HASS['hasTrigger']
+    g.add((prop_has_trigger, RDF.type, OWL.ObjectProperty))
+    g.add((prop_has_trigger, RDFS.domain, HASS['action/Action']))
+    g.add((prop_has_trigger, RDFS.range, tt))
 
     # Model platforms -- unclear if we'll really need this in the future,
     #  but useful for i) a complete metamodel ii) for cross-referencing.

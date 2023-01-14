@@ -1,10 +1,10 @@
 import json
+from forcediphttpsadapter.adapters import ForcedIPHTTPSAdapter
 from functools import cache
-
-import config
-
 import requests_cache
 import yaml
+
+import config
 
 
 class ConfigSource:
@@ -19,7 +19,8 @@ class RESTSource(ConfigSource):
                        'User-Agent': 'HOWL-exporter/0.1 vs+howl@foldr.org'
                        }
     # Set on-demand. TODO: Should be in `config.py`.
-    # session.verify = False
+    session.mount("https://mh30.foldr.org", ForcedIPHTTPSAdapter(dest_ip='192.168.10.1'))
+    session.verify = "MH30.crt"
 
     def getYAML(self, query):
         http_data = {'template': '{{ '+query+' }}'}
@@ -65,4 +66,5 @@ class RESTSource(ConfigSource):
     @cache
     def getAutomationConfig(self, automation_id):
         result = self.session.get(f"{config.hass_url}config/automation/config/{automation_id}")
+        assert result.status_code == 200, (result.status_code, result.text)
         return result.json()
