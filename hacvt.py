@@ -1,10 +1,13 @@
+from typing import Optional
+
 import homeassistant.const as hc
 
 import homeassistant.core as ha
 import homeassistant.helpers.config_validation as cv
 from homeassistant.components.sensor import SensorDeviceClass
 from homeassistant.components import (
-    climate
+    climate,
+    automation,
 )
 # Import some constants for later use: obviously this ain't gonna scale!
 from homeassistant.components.binary_sensor.device_trigger import CONF_MOTION, CONF_NO_MOTION
@@ -19,7 +22,7 @@ from ConfigSource import RESTSource
 
 import logging
 
-# logging.basicConfig(level='DEBUG')
+logging.basicConfig(level='INFO', format='%(levelname)s: %(message)s')
 
 cs = RESTSource()
 
@@ -35,7 +38,14 @@ def mkname(name):
 
 
 def mkEntityURI(MINE, entity_id):
+    # TODO: Not sure what we want to assume here for uniqueness...
+    # Protégé uses the URI the render the name, alternatively we could put
+    #  the friendly name into an attribute, but then we won't see it in the UI.
     e_platform, e_name = ha.split_entity_id(entity_id)
+    try:
+        e_name = cs.getAttributes(entity_id)['hc.ATTR_FRIENDLY_NAME']
+    except KeyError:
+        pass
     return MINE["entity/"+e_platform+"_"+mkname(e_name)]
 
 
@@ -79,7 +89,7 @@ def main():
         # O'sama denn hier? TODO.
         entry_type = cs.getDeviceAttr(d, 'entry_type')
         if not entry_type == "None":
-            eprint(f"INFO: Found {d} {name} as: {entry_type}")
+            logging.info(f"Found {d} {name} as: {entry_type}")
 
         d_g = mkDevice(MINE, d)
         g.add((d_g, RDF.type, SAREF['Device']))
@@ -100,14 +110,14 @@ def main():
         if via != "None":
             # Matches construction of d_g above:
             other = mkDevice(MINE, via)
-            eprint(f"INFO: Found via({d},{via})")
+            logging.info(f"Found via({d},{via})")
             g.add((d_g, HASS['via_device'], other))
         # END via_device
 
         es = cs.getDeviceEntities(d)
 
         if len(es) == 0:
-            eprint(f"WARN: Device {name} does not have any entities?!")
+            logging.info(f"Device {name} does not have any entities?!")
         # elif len(es) == 1:
         #     # Only one device, let's special-case
         #     eprint(f"WARN: Device {name} does only have a single entity {es[0]}.")
@@ -124,23 +134,21 @@ def main():
                 return not e_name.endswith("_identify")
 
             for e in filter(checkName, es):
-                eprint(f"Handling {e}:")
                 e_d = handle_entity(HASS, MINE, SAREF, class_to_saref, d, e, g, master)
                 # Derived entities and helpers are their own devices:
                 g.add((d_g, SAREF['consistsOf'], e_d))
 
-        for e in getEntitiesWODevice():
-            # These have an empty inverse of `consistsOf`
-            platform, name = ha.split_entity_id(e['entity_id'])
-            # Not a constant?
-            if platform == "automation":
-                handleAutomation(master, HASS, MINE, e['attributes'], name, g)
-            else:
-                handle_entity(HASS, MINE, SAREF, class_to_saref, None, e['entity_id'], g, master)
-
+    for e in getEntitiesWODevice():
+        # These have an empty inverse of `consistsOf`
+        platform, name = ha.split_entity_id(e['entity_id'])
+        # Not a constant?
+        if platform == automation.const.DOMAIN:
+            handleAutomation(master, HASS, MINE, e['attributes'], name, g)
+        else:
+            handle_entity(HASS, MINE, SAREF, class_to_saref, None, e['entity_id'], g, master)
 
     # Print Turtle output both to file and console:
-    f_out = open("/Users/vs/ha.ttl", "w")
+    f_out = open("ha.ttl", "w")
     print(g.serialize(format='turtle'), file=f_out)
     print(g.serialize(format='turtle'))
     exit(0)
@@ -203,13 +211,15 @@ def handleAutomation(master, HASS, MINE, a, a_name, g):
             g.add((o_action_instance, HASS['target'],  # or what?
                    Literal(str(cv.time_period(an_action[cv.CONF_DELAY])))))
         else:
-            eprint("WARN: Skipping action "+the_action + ":" + str(an_action))
+            logging.warning("Skipping action "+the_action + ":" + str(an_action))  # TODO
         # TODO: populate schema by action type
         # `action`s are governed by: https://github.com/home-assistant/core/blob/31a787558fd312331b55e5c2c4b33341fc3601fc/homeassistant/helpers/script.py#L270
         # After that it's following the `_SCHEMA`
     for a_trigger in a_config['trigger']:
         for t in cv.TRIGGER_SCHEMA(a_trigger):
             c_trigger = c_trigger+1
+            if not any(x for x in hc.Platform if x.name == t[cv.CONF_PLATFORM]):
+                logging.info(f"Found custom platform {t[cv.CONF_PLATFORM]}")
             if t[cv.CONF_PLATFORM] == "device":  # zha.device_trigger.DEVICE -- which we can't import
                 o_trigger = MINE["trigger/"+a_name+str(c_trigger)]
                 trigger_device = mkDevice(MINE, t['device_id'])
@@ -231,13 +241,13 @@ def handleAutomation(master, HASS, MINE, a, a_name, g):
                     # This is coming from deconz, and fat chance that we will be transcribing all of this by hand!
                     g.add((o_trigger, HASS['device'], trigger_device))
                 else:
-                    eprint(f"WARN: not handling trigger {t} yet.")
+                    logging.warning(f"not handling trigger {t} yet.")
                     pass
                 g.add((o_trigger, RDF.type, trigger_type))
                 # TODO: investigate warning on line below
                 g.add((o_action_instance, HASS['hasTrigger'], o_trigger))
             else:
-                eprint(f"WARN: not handling trigger platform {t[cv.CONF_PLATFORM]}: {t}.")
+                logging.warning(f"not handling trigger platform {t[cv.CONF_PLATFORM]}: {t}.")
     for a_condition in a_config['condition']:
         for c in cv.CONDITION_SCHEMA(a_condition):
             pass  # TODO
@@ -273,7 +283,8 @@ def mkServiceURI(MINE, SAREF, service_id):
     return e_service_instance
 
 
-def handle_entity(HASS, MINE, SAREF, class_to_saref, device, e, g, master):
+def handle_entity(HASS, MINE, SAREF, class_to_saref, device: Optional[str], e, g, master):
+    logging.info(f"Handling {e}.")
     assert e.count('.') == 1
     (domain, e_name) = ha.split_entity_id(e)
     # Experimental section:
@@ -306,10 +317,10 @@ def handle_entity(HASS, MINE, SAREF, class_to_saref, device, e, g, master):
             else:
                 # Spam:
                 if device_class is not None:
-                    eprint(f"WARN: Not handling class {device_class} for {e} (yet).")
+                    logging.warning(f"Not handling class {device_class} for {e} (yet).")
             # END
     if c is None:
-        eprint(f"WARN: Skipping {e} (no mapping for domain {domain}).")
+        logging.warning(f"Skipping {e} (no mapping for domain {domain}).")
     else:
         # https://github.com/home-assistant/core/blob/dev/homeassistant/helpers/entity_registry.py
 
@@ -318,7 +329,13 @@ def handle_entity(HASS, MINE, SAREF, class_to_saref, device, e, g, master):
         #  Maybe the name or NS should be more outstanding? The interesting cases are
         # where the type is in HA and not a trivial subclass of SAREF:Device, or where
         # multiple platforms are projected onto the same SAREF Device.
-        g.add((e_d, HASS['provided_by'], HASS['platform/'+domain.title()]))
+        # TODO: Check with Fernando if this single instance here is an anti-pattern.
+        # Or is our superclass like hass:Zone good enough?
+        # Create Platform subclass on the fly:
+        g.add((HASS['platform/' + domain.title()], RDFS.subClassOf, HASS['platform/Platform']))  # dupes...
+        # Create instance (is MINE a good choice here?):
+        g.add((MINE[domain.title()+"_platform"], RDF.type, HASS['platform/' + domain.title()]))
+        g.add((e_d, HASS['provided_by'], MINE[domain.title()+"_platform"]))
 
         # Look up services this domain should have, and create them for this entity.
         if domain in cs.getServices():
@@ -331,8 +348,9 @@ def handle_entity(HASS, MINE, SAREF, class_to_saref, device, e, g, master):
                 # TODO: constructed name is ... meh...
                 serviceOffer(MINE, SAREF, e_d, e_name, g, "_" + service, s_class)
 
-        # Let's be careful what is MINE and what is in HASS below.
-        # This part here maps HA platforms to SAREF-Device types?
+        # This part here maps HA platforms to SAREF-Device types.
+        # Some HASS entities we can map to SAREF, others we just carry around inheriting
+        #  from hass:Platform, because we can't  if they are saref:Devices. Or are they always?
         if domain == hc.Platform.SWITCH:  # TODO: more of those.
             # e_function = MINE[mkname(e_name)+"_function"]  # TODO: name?
             # g.add((e_function, RDF.type, SAREF['OnOffFunction']))
@@ -363,7 +381,7 @@ def handle_entity(HASS, MINE, SAREF, class_to_saref, device, e, g, master):
                     uri = URIRef("http://home-assistant.io/"+q)
                     # TODO: is this worth the effort?
                     if len(list(g.triples((uri, None, None)))) == 0:
-                        eprint(f"INFO: Creating {q}.")
+                        logging.info(f"Creating {q}.")
                         # Create Property...
                         g.add((q_o, RDFS.subClassOf, SAREF['Property']))
                 # ...and instance:
@@ -401,7 +419,7 @@ def handle_entity(HASS, MINE, SAREF, class_to_saref, device, e, g, master):
                 # TODO: XXX Nope, we're not measuring, we're setting!?
                 g.add((e_d, SAREF['measuresProperty'], brightness_prop))
         else:
-            eprint(f"WARN: not really handling platform {domain}.")
+            logging.warning(f"not really handling platform {domain}/{e}.")
     return e_d
 
 
