@@ -181,8 +181,12 @@ def handleAutomation(master, HASS, MINE, a, a_name, g):
     c_trigger = 0
     a_o = MINE["automation/" + mkname(a_name)]
     g.add((a_o, RDF.type, HASS['Automation']))
-    g.add((a_o, HASS['friendly_name'], Literal(a[hc.ATTR_FRIENDLY_NAME])))
+    if hc.ATTR_FRIENDLY_NAME in a:
+        g.add((a_o, HASS['friendly_name'], Literal(a[hc.ATTR_FRIENDLY_NAME])))
     # {'id': '1672829613487', 'alias': 'Floorheating BACK', 'description': '', 'trigger': [{'platform': 'time', 'at': 'input_datetime.floorheating_on'}], 'condition': [], 'action': [{'service': 'climate.set_temperature', 'data': {'temperature': 17}, 'target': {'device_id': 'ec5cb183f030a83754c6f402af08420f'}}], 'mode': 'single'}
+    if 'id' not in a:
+        logging.warn(f"Skipping automation {a_name} because it doesn't haven an id.")
+        return  # Can't really proceed without a config here.
     a_config = cs.getAutomationConfig(a['id'])
     i = 0  # We'll number the container-elements
     for an_action in a_config['action']:
@@ -249,10 +253,11 @@ def handleAutomation(master, HASS, MINE, a, a_name, g):
                 if t[hc.CONF_TYPE] == CONF_MOTION or t[hc.CONF_TYPE] == CONF_NO_MOTION:
                     attrs = cs.getAttributes(t['entity_id'])
                     d_class = attrs['device_class'] if 'device_class' in attrs else None
-                    assert d_class == "motion", d_class
+                    # assert d_class == "motion", d_class
                     trigger_entity, _ = mkEntityURI(MINE, t['entity_id'])
                     # TODO: Wait, why both? Is `device` redundant if you have entity?
-                    assert cs.getDeviceId(t['entity_id']) == t['device_id'], t
+                    if cs.getDeviceId(t['entity_id']) != t['device_id']:
+                        logging.warning(f"Interesting, device/entity mismatch in trigger: {cs.getDeviceId(t['entity_id']), t['device_id']}")
                     # g.add((o_trigger, HASS['trigger_device'], trigger_device))
                     g.add((o_trigger, HASS['trigger_entity'], trigger_entity))
                 elif t[hc.CONF_TYPE] == "remote_button_short_press" or t['type'] == "remote_button_long_press":
