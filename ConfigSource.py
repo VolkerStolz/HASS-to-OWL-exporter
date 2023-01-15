@@ -28,6 +28,12 @@ class RESTSource(ConfigSource):
         assert j_response.status_code == 200, f"YAML request failed: " + str(j_response.text)
         return yaml.safe_load(j_response.text)
 
+    def getYAMLText(self, query):
+        http_data = {'template': '{{ '+query+' }}'}
+        j_response = self.session.post(config.hass_url+"template", json=http_data)
+        assert j_response.status_code == 200, f"YAML request failed: " + str(j_response.text)
+        return j_response.text
+
     def getDevices(self):
         return self.getYAML('states | map(attribute="entity_id")|map("device_id") | unique | reject("eq",None) | list')
 
@@ -36,7 +42,7 @@ class RESTSource(ConfigSource):
 
     @cache
     def getDeviceAttr(self, device, attr):
-        return self.getYAML('device_attr("' + device + '","' + attr + '")')
+        return self.getYAMLText('device_attr("' + device + '","' + attr + '")')
 
     @cache
     def getDeviceId(self, entity):
