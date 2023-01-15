@@ -323,10 +323,10 @@ def handle_entity(HASS, MINE, SAREF, class_to_saref, device: Optional[str], e, g
             # Special-casing (business rule):
             if device_class == SensorDeviceClass.TEMPERATURE:
                 c = SAREF["TemperatureSensor"]
-                assert attrs['state_class'] == "measurement", attrs
+                # assert attrs['state_class'] == "measurement", attrs
             elif device_class == SensorDeviceClass.HUMIDITY:
                 c = HASS['HumiditySensor']
-                assert attrs['state_class'] == "measurement", attrs
+                # assert attrs['state_class'] == "measurement", attrs
             elif device_class == SensorDeviceClass.ENERGY:
                 c = SAREF['Meter']
                 # TODO -- probably we shouldn't be asserting those things.
