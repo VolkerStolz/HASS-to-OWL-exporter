@@ -210,9 +210,10 @@ def handleAutomation(master, HASS, MINE, a, a_name, g):
             #
             # The cv.* below is what is prescribed by HA, and maybe we don't have to dig deeper
             #  than `target`
-            service_id = an_action[cv.CONF_SERVICE]
-            target = an_action[cv.CONF_TARGET]
-            process_target_schema(HASS, MINE, g, o_action_instance, service_id, target)
+            if cv.CONF_TARGET in an_action and cv.CONF_SERVICE in an_action:
+                service_id = an_action[cv.CONF_SERVICE]
+                target = an_action[cv.CONF_TARGET]
+                process_target_schema(HASS, MINE, g, o_action_instance, service_id, target)
 
         elif the_action == cv.SCRIPT_ACTION_DEVICE_AUTOMATION:
             _, e_name = ha.split_entity_id(an_action[cv.CONF_ENTITY_ID])
