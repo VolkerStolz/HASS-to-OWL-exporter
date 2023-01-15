@@ -103,6 +103,8 @@ def main():
             logging.info(f"Found {d} {name} as: {entry_type}")
 
         d_g = mkDevice(MINE, d)
+        # TODO: The following is of course already a design-decision. We just create a container w/o particular type.
+        # TODO: Discuss with Fernando & Eduard.
         g.add((d_g, RDF.type, SAREF['Device']))
         g.add((d_g, SAREF['hasManufacturer'], Literal(manufacturer)))
         g.add((d_g, SAREF['hasModel'], Literal(model)))
@@ -146,8 +148,9 @@ def main():
 
             for e in filter(checkName, es):
                 e_d = handle_entity(HASS, MINE, SAREF, class_to_saref, d, e, g, master)
-                # Derived entities and helpers are their own devices:
-                g.add((d_g, SAREF['consistsOf'], e_d))
+                if e_d is not None:
+                    # Derived entities and helpers are their own devices:
+                    g.add((d_g, SAREF['consistsOf'], e_d))
 
     for e in getEntitiesWODevice():
         # These have an empty inverse of `consistsOf`
@@ -185,7 +188,7 @@ def handleAutomation(master, HASS, MINE, a, a_name, g):
         g.add((a_o, HASS['friendly_name'], Literal(a[hc.ATTR_FRIENDLY_NAME])))
     # {'id': '1672829613487', 'alias': 'Floorheating BACK', 'description': '', 'trigger': [{'platform': 'time', 'at': 'input_datetime.floorheating_on'}], 'condition': [], 'action': [{'service': 'climate.set_temperature', 'data': {'temperature': 17}, 'target': {'device_id': 'ec5cb183f030a83754c6f402af08420f'}}], 'mode': 'single'}
     if 'id' not in a:
-        logging.warn(f"Skipping automation {a_name} because it doesn't haven an id.")
+        logging.warning(f"Skipping automation {a_name} because it doesn't have an id.")
         return  # Can't really proceed without a config here.
     a_config = cs.getAutomationConfig(a['id'])
     i = 0  # We'll number the container-elements
@@ -315,23 +318,36 @@ def handle_entity(HASS, MINE, SAREF, class_to_saref, device: Optional[str], e, g
     # END
     attrs = cs.getAttributes(e)
     device_class = attrs['device_class'] if 'device_class' in attrs else None
-    e_d, e_name = mkEntityURI(MINE, e)
+    e_d = None
     # if device is not None and domain not in class_to_saref:
     if domain not in class_to_saref:
         if device is None:
             c = HASS[domain.title()]
+            # TODO: could be new, create super-class?
+            logging.error(f"Need super-class for {c}?")
         else:
             # TODO
             c = SAREF['Device']
     else:
         c = class_to_saref[domain]
-        if c == SAREF['Sensor']:  # XXX?
+        # Nope out if `None`. Otherwise, use `domain` to instantiate, and remember the super-class (RHS) for later.
+        if c is None:
+            logging.warning(f"Skipping {e} (no mapping for domain {domain}).")
+            return None  # Tell upstream.
+        (subclass, super_class) = c
+        if subclass:
+            c = HASS[domain.title()]
+        else:
+            c = super_class
+        if super_class == SAREF['Sensor']:  # XXX?
             # Special-casing (business rule):
             if device_class == SensorDeviceClass.TEMPERATURE:
                 c = SAREF["TemperatureSensor"]
                 # assert attrs['state_class'] == "measurement", attrs
             elif device_class == SensorDeviceClass.HUMIDITY:
-                c = HASS['HumiditySensor']
+                # TODO. Do we want more subclasses here?
+                pass
+                # c = HASS['HumiditySensor']
                 # assert attrs['state_class'] == "measurement", attrs
             elif device_class == SensorDeviceClass.ENERGY:
                 c = SAREF['Meter']
@@ -342,116 +358,113 @@ def handle_entity(HASS, MINE, SAREF, class_to_saref, device: Optional[str], e, g
                 if device_class is not None:
                     logging.warning(f"Not handling class {device_class} for {e} (yet).")
             # END
-    if c is None:
-        logging.warning(f"Skipping {e} (no mapping for domain {domain}).")
+    # https://github.com/home-assistant/core/blob/dev/homeassistant/helpers/entity_registry.py
+    e_d, e_name = mkEntityURI(MINE, e)
+    g.add((e_d, RDF.type, c))
+    # We're creating this reference to maybe analyse the mapping to SAREF later.
+    #  Maybe the name or NS should be more outstanding? The interesting cases are
+    # where the type is in HA and not a trivial subclass of SAREF:Device, or where
+    # multiple platforms are projected onto the same SAREF Device.
+    # TODO: Check with Fernando if this single instance here is an anti-pattern.
+    # Or is our superclass like hass:Zone good enough?
+    # Create Platform subclass on the fly:
+    g.add((HASS['platform/' + domain.title()], RDFS.subClassOf, HASS['platform/Platform']))  # dupes...
+    # Create instance (is MINE a good choice here?):
+    g.add((MINE[domain.title()+"_platform"], RDF.type, HASS['platform/' + domain.title()]))
+    g.add((e_d, HASS['provided_by'], MINE[domain.title()+"_platform"]))
+
+    # Look up services this domain should have, and create them for this entity.
+    features = attrs['supported_features'] if 'supported_features' in attrs else {}
+    if domain in cs.getServices():
+        for service in cs.getServices()[domain]:
+            skip = False
+            if domain == hc.Platform.CLIMATE:
+                skip = service == climate.const.SERVICE_SET_FAN_MODE and not features & climate.ClimateEntityFeature.FAN_MODE
+                skip |= service == climate.const.SERVICE_SET_HUMIDITY and not features & climate.ClimateEntityFeature.TARGET_HUMIDITY
+                skip |= service == climate.const.SERVICE_SET_PRESET_MODE and not features & climate.ClimateEntityFeature.PRESET_MODE
+                skip |= service == climate.const.SERVICE_SET_SWING_MODE and not features & climate.ClimateEntityFeature.SWING_MODE
+            if skip:
+                continue
+            # Silly mapping, also see below.
+            if service == hc.SERVICE_TURN_ON:
+                s_class = SAREF["SwitchOnService"]
+            else:
+                s_class = HASS["service/"+service.title()]
+            # TODO: constructed name is ... meh...
+            serviceOffer(MINE, SAREF, e_d, e_name, g, "_" + service, s_class)
+
+    # This part here maps HA platforms to SAREF-Device types.
+    # Some HASS entities we can map to SAREF, others we just carry around inheriting
+    #  from hass:Platform, because we can't  if they are saref:Devices. Or are they always?
+    if domain == hc.Platform.SWITCH:
+        # TODO: review double-typing.
+        g.add((e_d, RDF.type, SAREF['Switch']))
+        g.add((e_d, RDF.type, SAREF['Sensor']))  # because it would send notifications?
+        # e_function = MINE[mkname(e_name)+"_function"]  # TODO: name?
+        # g.add((e_function, RDF.type, SAREF['OnOffFunction']))
+        # g.add((e_d, SAREF['hasFunction'], e_function))
+        pass
+    elif domain == hc.Platform.BUTTON:
+        pass  # OK, nothing in there.
+    elif domain == hc.Platform.CLIMATE:
+        # Business rule: https://github.com/home-assistant/core/blob/dev/homeassistant/components/climate/__init__.py#L214
+        # Are we delivering temperature readings, e.g. an HVAC?
+        # TODO: Don't use double-typing, but add sub-devices to parent?
+        q = attrs[climate.ATTR_CURRENT_TEMPERATURE] if 'current_temperature' in attrs else None
+        if q is not None:
+            g.add((e_d, RDF.type, SAREF['TemperatureSensor']))
+        q = attrs[climate.ATTR_CURRENT_HUMIDITY] if 'current_humidity' in attrs else None
+        if q is not None:
+            g.add((e_d, RDF.type, HASS['HumiditySensor']))
+        # END
+    elif domain == hc.Platform.BINARY_SENSOR or domain == hc.Platform.SENSOR:  # Handle both types in one for now.
+        if device_class is not None:
+            # Patch lower-case names:
+            q = device_class.title()
+            # Let's look it up in the SAREF "master-list":
+            q_o = hasEntity(master, SAREF, 'Property', q)
+            # TODO: we don't find the ones that we've already created ourselves,
+            #  even in `g` that way!
+            if q_o is None:
+                q_o = HASS[q]
+                uri = URIRef("http://home-assistant.io/"+q)
+                # TODO: is this worth the effort?
+                if len(list(g.triples((uri, None, None)))) == 0:
+                    logging.info(f"Creating {q}.")
+                    # Create Property...
+                    g.add((q_o, RDFS.subClassOf, SAREF['Property']))
+            # ...and instance:
+            # TODO: should this be shared, ie. do we want different sensor measuring the same property?
+            q_prop = MINE[f"{q}_prop"]
+            g.add((q_prop, RDF.type, q_o))
+            g.add((e_d, SAREF['measuresProperty'], q_prop))
+        #
+        q = attrs['unit_of_measurement'] if 'unit_of_measurement' in attrs else None
+        if q is not None:
+            # TODO - more below. When is this complete? When we've either exhausted SAREF or HASS.
+            if device_class == SensorDeviceClass.TEMPERATURE:
+                unit = SAREF['TemperatureUnit']
+            elif device_class == SensorDeviceClass.CURRENT:
+                unit = SAREF['PowerUnit']
+            elif device_class == SensorDeviceClass.POWER:
+                unit = SAREF['PowerUnit']
+            elif device_class == SensorDeviceClass.ENERGY:
+                unit = SAREF['EnergyUnit']
+            elif device_class == SensorDeviceClass.PRESSURE:
+                unit = SAREF['PressureUnit']
+            else:  # Not built-in.
+                if q == "mbar":  # WIP
+                    assert False, device_class
+                unit = HASS[mkname(q)]
+                g.add((unit, RDFS.subClassOf, SAREF['UnitOfMeasure']))
+            g.add((MINE[mkname(q)], RDF.type, unit))
+    elif domain == hc.Platform.LIGHT:
+        pass  # Ok
+    elif domain == hc.Platform.WEATHER:
+        # TODO: Loooots of attributes
+        pass
     else:
-        # https://github.com/home-assistant/core/blob/dev/homeassistant/helpers/entity_registry.py
-
-        g.add((e_d, RDF.type, c))
-        # We're creating this reference to maybe analyse the mapping to SAREF later.
-        #  Maybe the name or NS should be more outstanding? The interesting cases are
-        # where the type is in HA and not a trivial subclass of SAREF:Device, or where
-        # multiple platforms are projected onto the same SAREF Device.
-        # TODO: Check with Fernando if this single instance here is an anti-pattern.
-        # Or is our superclass like hass:Zone good enough?
-        # Create Platform subclass on the fly:
-        g.add((HASS['platform/' + domain.title()], RDFS.subClassOf, HASS['platform/Platform']))  # dupes...
-        # Create instance (is MINE a good choice here?):
-        g.add((MINE[domain.title()+"_platform"], RDF.type, HASS['platform/' + domain.title()]))
-        g.add((e_d, HASS['provided_by'], MINE[domain.title()+"_platform"]))
-
-        # Look up services this domain should have, and create them for this entity.
-        features = attrs['supported_features'] if 'supported_features' in attrs else {}
-        if domain in cs.getServices():
-            for service in cs.getServices()[domain]:
-                skip = False
-                if domain == hc.Platform.CLIMATE:
-                    skip = service == climate.const.SERVICE_SET_FAN_MODE and not features & climate.ClimateEntityFeature.FAN_MODE
-                    skip |= service == climate.const.SERVICE_SET_HUMIDITY and not features & climate.ClimateEntityFeature.TARGET_HUMIDITY
-                    skip |= service == climate.const.SERVICE_SET_PRESET_MODE and not features & climate.ClimateEntityFeature.PRESET_MODE
-                    skip |= service == climate.const.SERVICE_SET_SWING_MODE and not features & climate.ClimateEntityFeature.SWING_MODE
-                if skip:
-                    continue
-                # Silly mapping, also see below.
-                if service == hc.SERVICE_TURN_ON:
-                    s_class = SAREF["SwitchOnService"]
-                else:
-                    s_class = HASS["service/"+service.title()]
-                # TODO: constructed name is ... meh...
-                serviceOffer(MINE, SAREF, e_d, e_name, g, "_" + service, s_class)
-
-        # This part here maps HA platforms to SAREF-Device types.
-        # Some HASS entities we can map to SAREF, others we just carry around inheriting
-        #  from hass:Platform, because we can't  if they are saref:Devices. Or are they always?
-        if domain == hc.Platform.SWITCH:
-            # TODO: review double-typing.
-            g.add((e_d, RDF.type, SAREF['Switch']))
-            g.add((e_d, RDF.type, SAREF['Sensor']))  # because it would send notifications?
-            # e_function = MINE[mkname(e_name)+"_function"]  # TODO: name?
-            # g.add((e_function, RDF.type, SAREF['OnOffFunction']))
-            # g.add((e_d, SAREF['hasFunction'], e_function))
-            pass
-        elif domain == hc.Platform.BUTTON:
-            pass  # OK, nothing in there.
-        elif domain == hc.Platform.CLIMATE:
-            # Business rule: https://github.com/home-assistant/core/blob/dev/homeassistant/components/climate/__init__.py#L214
-            # Are we delivering temperature readings, e.g. an HVAC?
-            # TODO: Don't use double-typing, but add sub-devices to parent?
-            q = attrs[climate.ATTR_CURRENT_TEMPERATURE] if 'current_temperature' in attrs else None
-            if q is not None:
-                g.add((e_d, RDF.type, SAREF['TemperatureSensor']))
-            q = attrs[climate.ATTR_CURRENT_HUMIDITY] if 'current_humidity' in attrs else None
-            if q is not None:
-                g.add((e_d, RDF.type, HASS['HumiditySensor']))
-            # END
-        elif domain == hc.Platform.BINARY_SENSOR or domain == hc.Platform.SENSOR:  # Handle both types in one for now.
-            if device_class is not None:
-                # Patch lower-case names:
-                q = device_class.title()
-                # Let's look it up in the SAREF "master-list":
-                q_o = hasEntity(master, SAREF, 'Property', q)
-                # TODO: we don't find the ones that we've already created ourselves,
-                #  even in `g` that way!
-                if q_o is None:
-                    q_o = HASS[q]
-                    uri = URIRef("http://home-assistant.io/"+q)
-                    # TODO: is this worth the effort?
-                    if len(list(g.triples((uri, None, None)))) == 0:
-                        logging.info(f"Creating {q}.")
-                        # Create Property...
-                        g.add((q_o, RDFS.subClassOf, SAREF['Property']))
-                # ...and instance:
-                # TODO: should this be shared, ie. do we want different sensor measuring the same property?
-                q_prop = MINE[f"{q}_prop"]
-                g.add((q_prop, RDF.type, q_o))
-                g.add((e_d, SAREF['measuresProperty'], q_prop))
-            #
-            q = attrs['unit_of_measurement'] if 'unit_of_measurement' in attrs else None
-            if q is not None:
-                # TODO - more below. When is this complete? When we've either exhausted SAREF or HASS.
-                if device_class == SensorDeviceClass.TEMPERATURE:
-                    unit = SAREF['TemperatureUnit']
-                elif device_class == SensorDeviceClass.CURRENT:
-                    unit = SAREF['PowerUnit']
-                elif device_class == SensorDeviceClass.POWER:
-                    unit = SAREF['PowerUnit']
-                elif device_class == SensorDeviceClass.ENERGY:
-                    unit = SAREF['EnergyUnit']
-                elif device_class == SensorDeviceClass.PRESSURE:
-                    unit = SAREF['PressureUnit']
-                else:  # Not built-in.
-                    if q == "mbar":  # WIP
-                        assert False, device_class
-                    unit = HASS[mkname(q)]
-                    g.add((unit, RDFS.subClassOf, SAREF['UnitOfMeasure']))
-                g.add((MINE[mkname(q)], RDF.type, unit))
-        elif domain == hc.Platform.LIGHT:
-            pass  # Ok
-        elif domain == hc.Platform.WEATHER:
-            # TODO: Loooots of attributes
-            pass
-        else:
-            logging.warning(f"not really handling platform {domain}/{e}.")
+        logging.warning(f"not really handling platform {domain}/{e}.")
     return e_d
 
 
@@ -540,47 +553,48 @@ def setupSAREF():
         #    g.add((HASS[s], MINE['provided'], HASS[d]))
 
     # Let's patch SAREF a bit with our extensions:
+    # True/False could be replace by having the HASS-ns on the RHS.
     class_to_saref = {
-        hc.Platform.AIR_QUALITY: HASS[hc.Platform.AIR_QUALITY.title()],
-        hc.Platform.ALARM_CONTROL_PANEL: SAREF["Device"],  # TODO
-        hc.Platform.BINARY_SENSOR: SAREF["Sensor"],
-        hc.Platform.BUTTON: HASS[hc.Platform.BUTTON.title()],  # ^-- compare style
+        hc.Platform.AIR_QUALITY: (True, SAREF["Sensor"]),
+        hc.Platform.ALARM_CONTROL_PANEL: (True, SAREF["Device"]),
+        hc.Platform.BINARY_SENSOR: (False, SAREF["Sensor"]),  # Design decisions...
+        hc.Platform.BUTTON: (True, SAREF["Sensor"]),
         hc.Platform.CALENDAR: None,
-        hc.Platform.CAMERA: SAREF["Device"],
-        hc.Platform.CLIMATE: SAREF["HVAC"],
-        hc.Platform.COVER: SAREF["Actuator"],  # ?
-        hc.Platform.DEVICE_TRACKER: SAREF["Sensor"],
-        hc.Platform.FAN: SAREF["Appliance"],
+        hc.Platform.CAMERA: (True, SAREF["Device"]),
+        hc.Platform.CLIMATE: (False, SAREF["HVAC"]),
+        hc.Platform.COVER: (True, SAREF["Actuator"]),  # ?
+        hc.Platform.DEVICE_TRACKER: (True, SAREF["Sensor"]),
+        hc.Platform.FAN: (True, SAREF["Appliance"]),
         hc.Platform.GEO_LOCATION: None,
-        hc.Platform.HUMIDIFIER: SAREF["Appliance"],
+        hc.Platform.HUMIDIFIER: (True, SAREF["Appliance"]),
         hc.Platform.IMAGE_PROCESSING: None,
-        hc.Platform.LIGHT: SAREF["Appliance"],
-        hc.Platform.LOCK: SAREF["Appliance"],
+        hc.Platform.LIGHT: (True, SAREF["Appliance"]),
+        hc.Platform.LOCK: (True, SAREF["Appliance"]),
         hc.Platform.MAILBOX: None,
-        hc.Platform.MEDIA_PLAYER: SAREF["Appliance"],
+        hc.Platform.MEDIA_PLAYER: (True, SAREF["Appliance"]),
         hc.Platform.NOTIFY: None,
         hc.Platform.NUMBER: None,  # SERVICE_SET_VALUE
-        hc.Platform.REMOTE: SAREF["Device"],
+        hc.Platform.REMOTE: (True, SAREF["Device"]),
         hc.Platform.SCENE: None,
         hc.Platform.SELECT: None,  # SERVICE_SELECT_OPTION
-        hc.Platform.SENSOR: SAREF["Sensor"],
-        hc.Platform.SIREN: SAREF["Appliance"],
+        hc.Platform.SENSOR: (False, SAREF["Sensor"]),
+        hc.Platform.SIREN: (True, SAREF["Appliance"]),
         hc.Platform.STT: None,
-        hc.Platform.SWITCH: SAREF["Switch"],
+        hc.Platform.SWITCH: (True, SAREF["Switch"]),
         hc.Platform.TEXT: None,
         hc.Platform.TTS: None,
         hc.Platform.UPDATE: None,
-        hc.Platform.VACUUM: SAREF["Appliance"],
-        hc.Platform.WATER_HEATER: SAREF["Appliance"],
-        hc.Platform.WEATHER: SAREF["Sensor"],
+        hc.Platform.VACUUM: (True, SAREF["Appliance"]),
+        hc.Platform.WATER_HEATER: (True, SAREF["Appliance"]),
+        hc.Platform.WEATHER: (True, SAREF["Sensor"]),
         # Not a `platform`:
-        "device": SAREF["Device"],  # of course...
+        "device": (False, SAREF["Device"]),  # of course...
     }
     for p, v in class_to_saref.items():
         if v is not None:
-            g.add((HASS[p.title()], RDFS.subClassOf, v))
-    # Special guest:
-    g.add((HASS["HumiditySensor"], RDFS.subClassOf, SAREF['Sensor']))
+            flag, superclass = v
+            if flag:
+                g.add((HASS[p.title()], RDFS.subClassOf, superclass))
     # END
 
     # Proper HASS-contribution to SAREF:
