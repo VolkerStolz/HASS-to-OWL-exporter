@@ -4,6 +4,7 @@ import homeassistant.helpers.config_validation as cv
 from homeassistant.components.sensor import SensorDeviceClass
 from homeassistant.components import (
     climate,
+    remote,
     automation,
 )
 # Import some constants for later use: obviously this ain't gonna scale!
@@ -383,6 +384,10 @@ def handle_entity(HASS, MINE, SAREF, class_to_saref, device: Optional[str], e, g
                 skip |= service == climate.const.SERVICE_SET_HUMIDITY and not features & climate.ClimateEntityFeature.TARGET_HUMIDITY
                 skip |= service == climate.const.SERVICE_SET_PRESET_MODE and not features & climate.ClimateEntityFeature.PRESET_MODE
                 skip |= service == climate.const.SERVICE_SET_SWING_MODE and not features & climate.ClimateEntityFeature.SWING_MODE
+            if domain == hc.Platform.REMOTE:
+                skip = service == remote.SERVICE_LEARN_COMMAND and not features & remote.RemoteEntityFeature.LEARN_COMMAND
+                skip |= service == remote.SERVICE_DELETE_COMMAND and not features & remote.RemoteEntityFeature.DELETE_COMMAND
+                # TODO: What about remote.RemoteEntityFeature.ACTIVITY?
             if skip:
                 continue
             # Silly mapping, also see below.
@@ -562,7 +567,7 @@ def setupSAREF():
         hc.Platform.CALENDAR: None,
         hc.Platform.CAMERA: (True, SAREF["Device"]),
         hc.Platform.CLIMATE: (False, SAREF["HVAC"]),
-        hc.Platform.COVER: (True, SAREF["Actuator"]),  # ?
+        hc.Platform.COVER: (True, SAREF["Actuator"]),  # ? saref4bldg:ShadingDevice
         hc.Platform.DEVICE_TRACKER: (True, SAREF["Sensor"]),
         hc.Platform.FAN: (True, SAREF["Appliance"]),
         hc.Platform.GEO_LOCATION: None,
