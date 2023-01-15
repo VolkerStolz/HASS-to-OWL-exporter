@@ -53,7 +53,7 @@ class RESTSource(ConfigSource):
         # TODO: could bounce through cached getStates() now.
         result = self.session.get(f"{config.hass_url}states/{e}")
         j = json.loads(result.text)
-        return j['attributes'] if 'attributes' in j else []
+        return j['attributes'] if 'attributes' in j else {}
 
     @cache
     def getStates(self):
