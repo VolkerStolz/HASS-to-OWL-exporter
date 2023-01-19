@@ -1,12 +1,26 @@
 import homeassistant.const as hc
 import homeassistant.core as ha
+from homeassistant.helpers.trigger import _PLATFORM_ALIASES
 import homeassistant.helpers.config_validation as cv
 from homeassistant.components.sensor import SensorDeviceClass
 from homeassistant.components import (
-    climate,
-    remote,
     automation,
+    binary_sensor,
+    button,
+    climate,
+    climate,
+    device_automation,
+    fan,
+    light,
+    remote,
+    sensor,
+    zone,
 )
+import homeassistant.components.button.device_action as button_da
+import homeassistant.components.climate.device_action as climate_da
+import homeassistant.components.light.device_action as light_da
+import homeassistant.components.switch.device_action as switch_da
+
 # Import some constants for later use: obviously this ain't gonna scale!
 from homeassistant.components.binary_sensor.device_trigger import CONF_MOTION, CONF_NO_MOTION
 # from homeassistant.components.deconz.device_trigger import CONF_SHORT_PRESS, CONF_LONG_PRESS
@@ -35,16 +49,18 @@ privacy_filter.add("device")
 for p in {"climate", "input_datetime", "sun", "time"}:
     privacy_filter.add(p)
 # Common things that you may want to adjust to keep them private and that are not part of the based platforms:
-privacy_filter.discard("device_tracker")    # Anonymize your mobile devices if you use the app.
+privacy_filter.discard("device_tracker")  # Anonymize your mobile devices if you use the app.
 # privacy_filter.add("person")              # Export our accounts in home-assistant.
-privacy_filter.add("area")                  # Export your self-defined area-names...
-privacy_filter.add("zone")                  #  ... and zones.
+privacy_filter.add("area")  # Export your self-defined area-names...
+privacy_filter.add("zone")  # ... and zones.
 # Final switch to export everything unfiltered, overriding anything above:
 privacy_filter = None
 
 # Log what we're doing:
 msg = "ALL" if privacy_filter is None else str(privacy_filter)
 logging.info(f"Preserving entities: {msg}")
+
+
 # END Privacy settings
 
 
@@ -62,22 +78,22 @@ def mkEntityURI(MINE, entity_id):
     e_platform, e_name = ha.split_entity_id(entity_id)
     # we use a white-list:
     if privacy_filter is not None and e_platform not in privacy_filter:
-        e_name = "entity_"+str(p_counter)
+        e_name = "entity_" + str(p_counter)
         p_counter = p_counter + 1
     else:
         try:
             e_name = cs.getAttributes(entity_id)['hc.ATTR_FRIENDLY_NAME']
         except KeyError:
             pass
-    return MINE["entity/"+e_platform+"_"+mkname(e_name)], e_name
+    return MINE["entity/" + e_platform + "_" + mkname(e_name)], e_name
 
 
 def mkLocationURI(MINE, name):
     global p_counter
     if privacy_filter is not None and "area" not in privacy_filter:
-        name = "entity_"+str(p_counter)
+        name = "entity_" + str(p_counter)
         p_counter = p_counter + 1
-    return MINE["area/"+mkname(name)]
+    return MINE["area/" + mkname(name)]
 
 
 # TODOs
@@ -174,8 +190,8 @@ def mkDevice(MINE, device_id):
     d2_name = cs.getDeviceAttr(device_id, 'name')
     d2_name_by_user = "None"
     if privacy_filter is not None and "device" not in privacy_filter:
-        d2_name = "device_"+str(p_counter)
-        p_counter = p_counter+1
+        d2_name = "device_" + str(p_counter)
+        p_counter = p_counter + 1
     else:
         d2_name_by_user = cs.getDeviceAttr(device_id, 'name_by_user')
     return MINE[mkname(d2_name if d2_name_by_user == "None" else d2_name_by_user)]
@@ -224,46 +240,138 @@ def handleAutomation(master, HASS, MINE, a, a_name, g):
                 process_target_schema(HASS, MINE, g, o_action_instance, service_id, target)
 
         elif the_action == cv.SCRIPT_ACTION_DEVICE_AUTOMATION:
-            _, e_name = ha.split_entity_id(an_action[cv.CONF_ENTITY_ID])
-            # Inventing 'target' here, there isn't much in Python?
-            # I think type+entity is good enough, and the device_id is redundant/from/for the dialog
-            #  so that it knows how to populate the Action-dropdown?
-            # TODO: Assert for sanity, but we need transitivity...
-            name = mkname(e_name) + "_" + an_action['type']
-            # assert hasEntity(master, Namespace("http://my.name.spc/service/"), 'Service', name) is not None, name
-            g.add((o_action_instance, HASS['target'], MINE["service/" + name]))
-            # The JSON also carries a `domain` which is most likely derived.
+            # Schema prescribes only `device_id` and `domain`.
+            # https://www.home-assistant.io/integrations/device_automation/
+            device = mkDevice(MINE, an_action[cv.CONF_DEVICE_ID])
+            g.add((o_action_instance, HASS['device'], device))
+
+            def button_action(config):
+                pass
+
+            def climate_action(config):
+                c = climate.device_action.ACTION_SCHEMA(config)
+                # dispatch on ACTION_TYPE, assemble action based on entity/mode:
+                _, e_name = ha.split_entity_id(c[cv.CONF_ENTITY_ID])
+                name = mkname(e_name) + "_" + c[cv.CONF_TYPE]
+                # TODO: should be intermediate object? Or subclassing?
+                my_service = MINE["service/" + name.title()]
+                g.add((o_action_instance, HASS['target'], my_service))
+                # Modelling happening here:
+                g.add((my_service, RDFS.subClassOf, HASS["Climate_Mode"]))
+                if c[cv.CONF_TYPE] == "set_hvac_mode":
+                    # Sloppy, should be enum:
+                    g.add((my_service, HASS['mode'], Literal(c[c[climate.const.HVAC_MODES]])))
+                elif c[cv.CONF_TYPE] == "set_preset_mode":
+                    g.add((my_service, HASS['mode'], Literal(c[climate.const.ATTR_PRESET_MODE])))
+                else:
+                    logging.fatal(f"Action Oops: {c}.")
+                pass
+
+            def toggle_action(config):
+                # Obs: we can't call the toggle_entity-schema validator, since the action
+                #   may have contributed new things.
+                c = config  # device_automation.toggle_entity.ACTION_SCHEMA(config)
+
+                if c[hc.CONF_TYPE] in device_automation.toggle_entity.DEVICE_ACTION_TYPES:
+                    _, e_name = ha.split_entity_id(c[cv.CONF_ENTITY_ID])
+                    name = mkname(e_name) + "_" + c[hc.CONF_TYPE]
+                    # assert hasEntity(master, Namespace("http://my.name.spc/service/"), 'Service', name) is not None, name
+                    # TODO: Why "service", not "action"?
+                    g.add((o_action_instance, HASS['target'], MINE["service/" + name]))
+                else:
+                    # Not for us here.
+                    pass
+                return c[cv.CONF_ENTITY_ID], c[hc.CONF_TYPE]
+
+            def climate_action(config):
+                # Inherits from device_automation/toggle_entity
+                toggle_action(config)
+                pass
+
+            def light_action(config):
+                # "Inherits" from device_automation/toggle_entity
+                e_id, type = toggle_action(config)
+                opt_flash = config[light_da.ATTR_FLASH] if light_da in config else None
+                opt_bright_pct = config[light_da.ATTR_BRIGHTNESS_PCT] if light_da in config else None
+                # TODO: Can model here! It looks like that you can set DECREASE and still set PCT > 10 :-)
+                if type == light_da.TYPE_BRIGHTNESS_DECREASE:
+                    # default: -10
+                    # TODO: Review with Fernando
+                    # TODO: superclass + attributes
+                    g.add((o_action_instance, RDFS.subClassOf, HASS['LIGHT_ACTION_CHANGE_BRIGHTNESS']))
+                    g.add((o_action_instance, HASS['changeBrightness'], Literal(opt_bright_pct if opt_bright_pct is not None else 10)))
+                elif type == light_da.TYPE_BRIGHTNESS_INCREASE:
+                    # default: +10
+                    g.add((o_action_instance, RDFS.subClassOf, HASS['LIGHT_ACTION_CHANGE_BRIGHTNESS']))
+                    g.add((o_action_instance, HASS['changeBrightness'], Literal(opt_bright_pct if opt_bright_pct is not None else 10)))
+                elif type == light_da.TYPE_FLASH:
+                    # default = short according to source.
+                    g.add((o_action_instance, RDFS.subClassOf, HASS['LIGHT_ACTION_FLASH']))
+                    g.add((o_action_instance, HASS['flash'], Literal(opt_flash if opt_flash is not None else "short")))
+                else:
+                    logging.fatal(f"Unsupported type in: {config}")
+
+            def switch_action(config):
+                toggle_action(config)
+
+            action_table = {
+                hc.Platform.BINARY_SENSOR: None,
+                hc.Platform.BUTTON: (button_da.ACTION_SCHEMA, button_action),
+                hc.Platform.CLIMATE: (climate_da.ACTION_SCHEMA, climate_action),
+                # hc.Platform.FAN: (fan.device_action.ACTION_SCHEMA, fan_action),
+                hc.Platform.LIGHT: (light_da.ACTION_SCHEMA, light_action),
+                hc.Platform.SENSOR: None,
+                hc.Platform.SWITCH: (switch_da.ACTION_SCHEMA, switch_action),
+            }
+            if an_action[cv.CONF_DOMAIN] not in action_table:
+                logging.error(f"Skipping action domain {an_action[cv.CONF_DOMAIN]}.")
+            else:
+                schema, action = action_table[an_action[cv.CONF_DOMAIN]]
+                if action is not None:
+                    # And off we go!
+                    action(schema(an_action))
         elif the_action == cv.SCRIPT_ACTION_DELAY:
             g.add((o_action_instance, HASS['target'],  # or what?
                    Literal(str(cv.time_period(an_action[cv.CONF_DELAY])))))
         else:
-            logging.warning("Skipping action "+the_action + ":" + str(an_action))  # TODO
+            logging.warning("Skipping action " + the_action + ":" + str(an_action))  # TODO
         # TODO: populate schema by action type
         # `action`s are governed by: https://github.com/home-assistant/core/blob/31a787558fd312331b55e5c2c4b33341fc3601fc/homeassistant/helpers/script.py#L270
         # After that it's following the `_SCHEMA`
     for a_trigger in a_config['trigger']:
         for t in cv.TRIGGER_SCHEMA(a_trigger):
-            c_trigger = c_trigger+1
+            # Only `platform` is mandatory.
+            c_trigger = c_trigger + 1
             if not any(x for x in hc.Platform if x.name == t[cv.CONF_PLATFORM]):
-                logging.info(f"Found custom platform {t[cv.CONF_PLATFORM]}")
-            if t[cv.CONF_PLATFORM] == "device":  # zha.device_trigger.DEVICE -- which we can't import
-                o_trigger = MINE["trigger/"+a_name+str(c_trigger)]
+                # These are some built-ins:
+                if not (t[cv.CONF_PLATFORM] in _PLATFORM_ALIASES["device_automation"]
+                        or t[cv.CONF_PLATFORM] in _PLATFORM_ALIASES["homeassistant"]):
+                    logging.info(f"Found custom platform `{t[cv.CONF_PLATFORM]}`")
+
+            o_trigger = MINE["trigger/" + a_name + str(c_trigger)]
+
+            e_id = t['entity_id'] if 'entity_id' in t else None
+            if e_id is not None:
+                trigger_entity, _ = mkEntityURI(MINE, e_id)
+                g.add((o_trigger, HASS['trigger_entity'], trigger_entity))
+
+            # Still a bit unclear here. An Action Trigger schema is very general,
+            #  whereas the concrete schemas like binary_sensor/device_trigger.py prescribe more elements,
+            #  most importantly `entity_id`
+            if t[cv.CONF_PLATFORM] == "device":
                 trigger_device = mkDevice(MINE, t['device_id'])
                 trigger_type = HASS["type/" + t['type']]  # TODO: static? May not be possible/effective,
                 # ...since there's no global super-container? This must be INSIDE Homeassistant!
                 # What I don't know is if the triggers etc. are installed even though you're not using the integration...
                 g.add((trigger_type, RDFS.subClassOf, HASS["type/TriggerType"]))
-                # This code below does not scale:
+                # Does this code below does scale? Of course we could enumerate all Sensor/BinarySensor types.
                 if t[hc.CONF_TYPE] == CONF_MOTION or t[hc.CONF_TYPE] == CONF_NO_MOTION:
-                    attrs = cs.getAttributes(t['entity_id'])
+                    attrs = cs.getAttributes(e_id)
                     d_class = attrs['device_class'] if 'device_class' in attrs else None
-                    # assert d_class == "motion", d_class
-                    trigger_entity, _ = mkEntityURI(MINE, t['entity_id'])
-                    # TODO: Wait, why both? Is `device` redundant if you have entity?
-                    if cs.getDeviceId(t['entity_id']) != t['device_id']:
-                        logging.warning(f"Interesting, device/entity mismatch in trigger: {cs.getDeviceId(t['entity_id']), t['device_id']}")
-                    # g.add((o_trigger, HASS['trigger_device'], trigger_device))
-                    g.add((o_trigger, HASS['trigger_entity'], trigger_entity))
+                    # assert d_class == BinarySensorDeviceClass.MOTION, d_class  # Not all code seems to respect this?
+                    # We've already added the entity, but also add the device:
+                    # TODO: solves this a bit higher up in general?
+                    g.add((o_trigger, HASS['trigger_device'], trigger_device))
                 elif t[hc.CONF_TYPE] == "remote_button_short_press" or t['type'] == "remote_button_long_press":
                     # This is coming from deconz, and fat chance that we will be transcribing all of this by hand!
                     g.add((o_trigger, HASS['device'], trigger_device))
@@ -273,6 +381,8 @@ def handleAutomation(master, HASS, MINE, a, a_name, g):
                 g.add((o_trigger, RDF.type, trigger_type))
                 # TODO: investigate warning on line below
                 g.add((o_action_instance, HASS['hasTrigger'], o_trigger))
+            elif t[cv.CONF_PLATFORM] == zone.const.DOMAIN:
+                pass
             else:
                 logging.warning(f"not handling trigger platform {t[cv.CONF_PLATFORM]}: {t}.")
     for a_condition in a_config['condition']:
@@ -301,12 +411,13 @@ def process_target_schema(HASS, MINE, g, o_action_instance, service_id, target):
             g.add((o_action_instance, HASS['target'], target_area))
 
 
+# TODO: unsused?!
 def mkServiceURI(MINE, SAREF, service_id):
     _, service_name = ha.split_entity_id(service_id)
     if service_name == hc.SERVICE_TURN_ON:  # dupe TODO
         e_service_instance = SAREF["SwitchOnService"]
     else:
-        e_service_instance = MINE["service/"+mkname(service_name.title()) + "_service"]
+        e_service_instance = MINE["service/" + mkname(service_name.title()) + "_service"]
     return e_service_instance
 
 
@@ -371,8 +482,8 @@ def handle_entity(HASS, MINE, SAREF, class_to_saref, device: Optional[str], e, g
     # Create Platform subclass on the fly:
     g.add((HASS['platform/' + domain.title()], RDFS.subClassOf, HASS['platform/Platform']))  # dupes...
     # Create instance (is MINE a good choice here?):
-    g.add((MINE[domain.title()+"_platform"], RDF.type, HASS['platform/' + domain.title()]))
-    g.add((e_d, HASS['provided_by'], MINE[domain.title()+"_platform"]))
+    g.add((MINE[domain.title() + "_platform"], RDF.type, HASS['platform/' + domain.title()]))
+    g.add((e_d, HASS['provided_by'], MINE[domain.title() + "_platform"]))
 
     # Look up services this domain should have, and create them for this entity.
     features = attrs['supported_features'] if 'supported_features' in attrs else {}
@@ -384,17 +495,22 @@ def handle_entity(HASS, MINE, SAREF, class_to_saref, device: Optional[str], e, g
                 skip |= service == climate.const.SERVICE_SET_HUMIDITY and not features & climate.ClimateEntityFeature.TARGET_HUMIDITY
                 skip |= service == climate.const.SERVICE_SET_PRESET_MODE and not features & climate.ClimateEntityFeature.PRESET_MODE
                 skip |= service == climate.const.SERVICE_SET_SWING_MODE and not features & climate.ClimateEntityFeature.SWING_MODE
-            if domain == hc.Platform.REMOTE:
+            elif domain == hc.Platform.REMOTE:
                 skip = service == remote.SERVICE_LEARN_COMMAND and not features & remote.RemoteEntityFeature.LEARN_COMMAND
                 skip |= service == remote.SERVICE_DELETE_COMMAND and not features & remote.RemoteEntityFeature.DELETE_COMMAND
                 # TODO: What about remote.RemoteEntityFeature.ACTIVITY?
+            elif domain == hc.Platform.LIGHT:
+                # Unclear how to handle light.LightEntityFeature.FLASH -- affects just args?
+                pass
+            else:
+                pass  # TODO
             if skip:
                 continue
             # Silly mapping, also see below.
             if service == hc.SERVICE_TURN_ON:
                 s_class = SAREF["SwitchOnService"]
             else:
-                s_class = HASS["service/"+service.title()]
+                s_class = HASS["service/" + service.title()]
             # TODO: constructed name is ... meh...
             serviceOffer(MINE, SAREF, e_d, e_name, g, "_" + service, s_class)
 
@@ -432,7 +548,7 @@ def handle_entity(HASS, MINE, SAREF, class_to_saref, device: Optional[str], e, g
             #  even in `g` that way!
             if q_o is None:
                 q_o = HASS[q]
-                uri = URIRef("http://home-assistant.io/"+q)
+                uri = URIRef("http://home-assistant.io/" + q)
                 # TODO: is this worth the effort?
                 if len(list(g.triples((uri, None, None)))) == 0:
                     logging.info(f"Creating {q}.")
@@ -474,7 +590,7 @@ def handle_entity(HASS, MINE, SAREF, class_to_saref, device: Optional[str], e, g
 
 
 def serviceOffer(MINE, SAREF, e_d, e_name, g, suffix, svc_obj):
-    e_service_inst = MINE["service/"+mkname(e_name) + suffix]
+    e_service_inst = MINE["service/" + mkname(e_name) + suffix]
     g.add((e_service_inst, RDF.type, svc_obj))
     g.add((e_d, SAREF['offers'], e_service_inst))
 
@@ -551,7 +667,7 @@ def setupSAREF():
         # This is weird: SAREF has SwitchOnService -- only:
         if s == hc.SERVICE_TURN_ON:
             continue  # special case...
-        g.add((HASS["service/"+s.title()], RDFS.subClassOf, SAREF['Service']))
+        g.add((HASS["service/" + s.title()], RDFS.subClassOf, SAREF['Service']))
         # WIP -- do we want to inject ALL HASS classes below the corresponding SAREF devices?
         # for d in domains:
         #    print(s,d)
@@ -620,7 +736,7 @@ def setupSAREF():
     g.add((h_prov, RDFS.domain, HASS['Automation']))
     g.add((h_prov, RDFS.range, ha_action))
     for k, v in cv.ACTION_TYPE_SCHEMAS.items():
-        g.add((HASS["action/"+k.title()], RDFS.subClassOf, ha_action))
+        g.add((HASS["action/" + k.title()], RDFS.subClassOf, ha_action))
     # END
 
     tt = HASS["type/TriggerType"]
@@ -641,7 +757,7 @@ def setupSAREF():
     g.add((h_prov, RDFS.range, ha_platform))
 
     for p in hc.Platform:
-        g.add((HASS['platform/'+p.title()], RDF.type, ha_platform))
+        g.add((HASS['platform/' + p.title()], RDF.type, ha_platform))
     # END
 
     # TODO: Export HASS schema as separate file and import in model, instead of having it in the graph. (#5)
