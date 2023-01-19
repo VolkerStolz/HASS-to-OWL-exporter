@@ -8,18 +8,19 @@ from homeassistant.components import (
     binary_sensor,
     button,
     climate,
-    climate,
     device_automation,
     fan,
     light,
     remote,
     sensor,
+    switch,
     zone,
 )
-import homeassistant.components.button.device_action as button_da
-import homeassistant.components.climate.device_action as climate_da
-import homeassistant.components.light.device_action as light_da
-import homeassistant.components.switch.device_action as switch_da
+import homeassistant.components.button.device_action
+import homeassistant.components.climate.device_action
+import homeassistant.components.fan.device_action
+import homeassistant.components.light.device_action
+import homeassistant.components.switch.device_action
 
 # Import some constants for later use: obviously this ain't gonna scale!
 from homeassistant.components.binary_sensor.device_trigger import CONF_MOTION, CONF_NO_MOTION
@@ -72,19 +73,13 @@ def mkname(name):
 
 def mkEntityURI(MINE, entity_id):
     global p_counter
-    # TODO: Not sure what we want to assume here for uniqueness...
-    # Protégé uses the URI the render the name, alternatively we could put
-    #  the friendly name into an attribute, but then we won't see it in the UI.
+    # TODO: Not sure what we want to assume here for uniqueness...probably want to keep domain.name instead of
+    #  discarding it? Note that adding may happen somewhere else, as does setting a `friendly name` if it exists.
     e_platform, e_name = ha.split_entity_id(entity_id)
-    # we use a white-list:
+    # we use a white-list in the privacy filter:
     if privacy_filter is not None and e_platform not in privacy_filter:
         e_name = "entity_" + str(p_counter)
         p_counter = p_counter + 1
-    else:
-        try:
-            e_name = cs.getAttributes(entity_id)['hc.ATTR_FRIENDLY_NAME']
-        except KeyError:
-            pass
     return MINE["entity/" + e_platform + "_" + mkname(e_name)], e_name
 
 
@@ -128,11 +123,13 @@ def main():
 
         # Handle 'Area' of devices. May be None.
         # TODO: Entities can override this individually.
-        d_area = cs.getYAML(f'area_id("{d}")')
+        d_area = cs.getYAMLText(f'area_id("{d}")')
+        area_name = cs.getYAMLText(f'area_name("{d}")')
         if not d_area == "None":  # Careful, string!
             area = mkLocationURI(MINE, d_area)
             g.add((area, RDF.type, S4BLDG['BuildingSpace']))
             g.add((area, S4BLDG['contains'], d_g))
+            g.add((area, RDFS.label, Literal(area_name)))
         # END Area
 
         # Handle `via_device` if present.
@@ -202,7 +199,7 @@ def handleAutomation(master, HASS, MINE, a, a_name, g):
     a_o = MINE["automation/" + mkname(a_name)]
     g.add((a_o, RDF.type, HASS['Automation']))
     if hc.ATTR_FRIENDLY_NAME in a:
-        g.add((a_o, HASS['friendly_name'], Literal(a[hc.ATTR_FRIENDLY_NAME])))
+        g.add((a_o, RDFS.label, Literal(a[hc.ATTR_FRIENDLY_NAME])))
     # {'id': '1672829613487', 'alias': 'Floorheating BACK', 'description': '', 'trigger': [{'platform': 'time', 'at': 'input_datetime.floorheating_on'}], 'condition': [], 'action': [{'service': 'climate.set_temperature', 'data': {'temperature': 17}, 'target': {'device_id': 'ec5cb183f030a83754c6f402af08420f'}}], 'mode': 'single'}
     if 'id' not in a:
         logging.warning(f"Skipping automation {a_name} because it doesn't have an id.")
@@ -222,7 +219,7 @@ def handleAutomation(master, HASS, MINE, a, a_name, g):
         o_action = HASS["action/" + the_action.title()]
         o_action_instance = MINE["action/" + mkname(a_name) + "_" + str(i)]
         g.add((o_action_instance, RDF.type, o_action))
-        g.add((a_o, HASS['consistsOf'], o_action_instance))  # TODO: XXX create multiplicity in schema
+        g.add((a_o, HASS['consistsOf'], o_action_instance))  # TODO: XXX create multiplicity+order in schema
         i = i + 1
         if the_action == cv.SCRIPT_ACTION_CALL_SERVICE:
             # TODO: use schema in Python...SERVICE_SCHEMA
@@ -234,6 +231,7 @@ def handleAutomation(master, HASS, MINE, a, a_name, g):
             #
             # The cv.* below is what is prescribed by HA, and maybe we don't have to dig deeper
             #  than `target`
+            # TODO: Everythign here is optional...
             if cv.CONF_TARGET in an_action and cv.CONF_SERVICE in an_action:
                 service_id = an_action[cv.CONF_SERVICE]
                 target = an_action[cv.CONF_TARGET]
@@ -246,23 +244,26 @@ def handleAutomation(master, HASS, MINE, a, a_name, g):
             g.add((o_action_instance, HASS['device'], device))
 
             def button_action(config):
-                pass
+                e_id, _ = mkEntityURI(MINE, an_action[cv.CONF_ENTITY_ID])
+                g.add((o_action_instance, HASS['press'], e_id))
 
             def climate_action(config):
                 c = climate.device_action.ACTION_SCHEMA(config)
                 # dispatch on ACTION_TYPE, assemble action based on entity/mode:
-                _, e_name = ha.split_entity_id(c[cv.CONF_ENTITY_ID])
-                name = mkname(e_name) + "_" + c[cv.CONF_TYPE]
+                _, e_name = ha.split_entity_id(c[hc.CONF_ENTITY_ID])
+                name = mkname(e_name) + "_" + c[hc.CONF_TYPE]
                 # TODO: should be intermediate object? Or subclassing?
                 my_service = MINE["service/" + name.title()]
                 g.add((o_action_instance, HASS['target'], my_service))
                 # Modelling happening here:
                 g.add((my_service, RDFS.subClassOf, HASS["Climate_Mode"]))
-                if c[cv.CONF_TYPE] == "set_hvac_mode":
+                if c[hc.CONF_TYPE] == "set_hvac_mode":
+                    mode = c[climate.ATTR_HVAC_MODE]
                     # Sloppy, should be enum:
-                    g.add((my_service, HASS['mode'], Literal(c[c[climate.const.HVAC_MODES]])))
-                elif c[cv.CONF_TYPE] == "set_preset_mode":
-                    g.add((my_service, HASS['mode'], Literal(c[climate.const.ATTR_PRESET_MODE])))
+                    g.add((my_service, HASS['mode'], Literal(mode)))
+                elif c[hc.CONF_TYPE] == "set_preset_mode":
+                    mode = c[climate.ATTR_PRESET_MODE]
+                    g.add((my_service, HASS['mode'], Literal(mode)))
                 else:
                     logging.fatal(f"Action Oops: {c}.")
                 pass
@@ -283,45 +284,37 @@ def handleAutomation(master, HASS, MINE, a, a_name, g):
                     pass
                 return c[cv.CONF_ENTITY_ID], c[hc.CONF_TYPE]
 
-            def climate_action(config):
-                # Inherits from device_automation/toggle_entity
-                toggle_action(config)
-                pass
-
             def light_action(config):
                 # "Inherits" from device_automation/toggle_entity
                 e_id, type = toggle_action(config)
-                opt_flash = config[light_da.ATTR_FLASH] if light_da in config else None
-                opt_bright_pct = config[light_da.ATTR_BRIGHTNESS_PCT] if light_da in config else None
+                opt_flash = config[light.device_action.ATTR_FLASH] if light.device_action in config else None
+                opt_bright_pct = config[light.device_action.ATTR_BRIGHTNESS_PCT] if light.device_action in config else None
                 # TODO: Can model here! It looks like that you can set DECREASE and still set PCT > 10 :-)
-                if type == light_da.TYPE_BRIGHTNESS_DECREASE:
+                if type == light.device_action.TYPE_BRIGHTNESS_DECREASE:
                     # default: -10
                     # TODO: Review with Fernando
                     # TODO: superclass + attributes
                     g.add((o_action_instance, RDFS.subClassOf, HASS['LIGHT_ACTION_CHANGE_BRIGHTNESS']))
-                    g.add((o_action_instance, HASS['changeBrightness'], Literal(opt_bright_pct if opt_bright_pct is not None else 10)))
-                elif type == light_da.TYPE_BRIGHTNESS_INCREASE:
+                    g.add((o_action_instance, HASS['changeBrightness'], Literal(opt_bright_pct if opt_bright_pct is not None else -10)))
+                elif type == light.device_action.TYPE_BRIGHTNESS_INCREASE:
                     # default: +10
                     g.add((o_action_instance, RDFS.subClassOf, HASS['LIGHT_ACTION_CHANGE_BRIGHTNESS']))
                     g.add((o_action_instance, HASS['changeBrightness'], Literal(opt_bright_pct if opt_bright_pct is not None else 10)))
-                elif type == light_da.TYPE_FLASH:
+                elif type == light.device_action.TYPE_FLASH:
                     # default = short according to source.
                     g.add((o_action_instance, RDFS.subClassOf, HASS['LIGHT_ACTION_FLASH']))
                     g.add((o_action_instance, HASS['flash'], Literal(opt_flash if opt_flash is not None else "short")))
                 else:
                     logging.fatal(f"Unsupported type in: {config}")
 
-            def switch_action(config):
-                toggle_action(config)
-
             action_table = {
                 hc.Platform.BINARY_SENSOR: None,
-                hc.Platform.BUTTON: (button_da.ACTION_SCHEMA, button_action),
-                hc.Platform.CLIMATE: (climate_da.ACTION_SCHEMA, climate_action),
+                hc.Platform.BUTTON: (button.device_action.ACTION_SCHEMA, button_action),
+                hc.Platform.CLIMATE: (climate.device_action.ACTION_SCHEMA, climate_action),
                 # hc.Platform.FAN: (fan.device_action.ACTION_SCHEMA, fan_action),
-                hc.Platform.LIGHT: (light_da.ACTION_SCHEMA, light_action),
+                hc.Platform.LIGHT: (light.device_action.ACTION_SCHEMA, light_action),
                 hc.Platform.SENSOR: None,
-                hc.Platform.SWITCH: (switch_da.ACTION_SCHEMA, switch_action),
+                hc.Platform.SWITCH: (switch.device_action.ACTION_SCHEMA, toggle_action),  # Nothing more.
             }
             if an_action[cv.CONF_DOMAIN] not in action_table:
                 logging.error(f"Skipping action domain {an_action[cv.CONF_DOMAIN]}.")
@@ -331,7 +324,7 @@ def handleAutomation(master, HASS, MINE, a, a_name, g):
                     # And off we go!
                     action(schema(an_action))
         elif the_action == cv.SCRIPT_ACTION_DELAY:
-            g.add((o_action_instance, HASS['target'],  # or what?
+            g.add((o_action_instance, HASS['delay'],  # sloppy
                    Literal(str(cv.time_period(an_action[cv.CONF_DELAY])))))
         else:
             logging.warning("Skipping action " + the_action + ":" + str(an_action))  # TODO
@@ -473,6 +466,13 @@ def handle_entity(HASS, MINE, SAREF, class_to_saref, device: Optional[str], e, g
     # https://github.com/home-assistant/core/blob/dev/homeassistant/helpers/entity_registry.py
     e_d, e_name = mkEntityURI(MINE, e)
     g.add((e_d, RDF.type, c))
+    try:
+        friendly_name = cs.getAttributes(e)[hc.ATTR_FRIENDLY_NAME]
+        # Bad idea, but...:
+        g.add((e_d, RDFS.label, Literal(friendly_name)))
+    except KeyError:
+        pass
+
     # We're creating this reference to maybe analyse the mapping to SAREF later.
     #  Maybe the name or NS should be more outstanding? The interesting cases are
     # where the type is in HA and not a trivial subclass of SAREF:Device, or where
