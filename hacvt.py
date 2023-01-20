@@ -519,8 +519,7 @@ def handle_entity(HASS, MINE, SAREF, class_to_saref, device: Optional[str], e, g
     #  from hass:Platform, because we can't  if they are saref:Devices. Or are they always?
     if domain == hc.Platform.SWITCH:
         # TODO: review double-typing.
-        g.add((e_d, RDF.type, SAREF['Switch']))
-        g.add((e_d, RDF.type, SAREF['Sensor']))  # because it would send notifications?
+        g.add((e_d, RDF.type, SAREF['Sensor']))  # because it would send notifications/"measure" the current setting?
         # e_function = MINE[mkname(e_name)+"_function"]  # TODO: name?
         # g.add((e_function, RDF.type, SAREF['OnOffFunction']))
         # g.add((e_d, SAREF['hasFunction'], e_function))
@@ -547,13 +546,8 @@ def handle_entity(HASS, MINE, SAREF, class_to_saref, device: Optional[str], e, g
             # TODO: we don't find the ones that we've already created ourselves,
             #  even in `g` that way!
             if q_o is None:
-                q_o = HASS[q]
-                uri = URIRef("http://home-assistant.io/" + q)
-                # TODO: is this worth the effort?
-                if len(list(g.triples((uri, None, None)))) == 0:
-                    logging.info(f"Creating {q}.")
-                    # Create Property...
-                    g.add((q_o, RDFS.subClassOf, SAREF['Property']))
+                # TODO: should search in the same way as `hasEntity` above.
+                q_o = createPropertyIfMissing(HASS, SAREF, g, q)
             # ...and instance:
             # TODO: should this be shared, ie. do we want different sensor measuring the same property?
             q_prop = MINE[f"{q}_prop"]
@@ -574,10 +568,10 @@ def handle_entity(HASS, MINE, SAREF, class_to_saref, device: Optional[str], e, g
             elif device_class == SensorDeviceClass.PRESSURE:
                 unit = SAREF['PressureUnit']
             else:  # Not built-in.
-                if q == "mbar":  # WIP
-                    assert False, device_class
+                # TODO: check -- are we done here?
                 unit = HASS[mkname(q)]
                 g.add((unit, RDFS.subClassOf, SAREF['UnitOfMeasure']))
+                # TODO: add Measurement/Property
             g.add((MINE[mkname(q)], RDF.type, unit))
     elif domain == hc.Platform.LIGHT:
         pass  # Ok
@@ -587,6 +581,17 @@ def handle_entity(HASS, MINE, SAREF, class_to_saref, device: Optional[str], e, g
     else:
         logging.warning(f"not really handling platform {domain}/{e}.")
     return e_d
+
+
+def createPropertyIfMissing(HASS, SAREF, g, q):
+    q_o = HASS[q]
+    uri = URIRef("http://home-assistant.io/" + q)
+    # TODO: is this worth the effort?
+    if len(list(g.triples((uri, None, None)))) == 0:
+        logging.info(f"Creating {q}.")
+        # Create Property...
+        g.add((q_o, RDFS.subClassOf, SAREF['Property']))
+    return q_o
 
 
 def serviceOffer(MINE, SAREF, e_d, e_name, g, suffix, svc_obj):
@@ -678,7 +683,7 @@ def setupSAREF():
     class_to_saref = {
         hc.Platform.AIR_QUALITY: (True, SAREF["Sensor"]),
         hc.Platform.ALARM_CONTROL_PANEL: (True, SAREF["Device"]),
-        hc.Platform.BINARY_SENSOR: (False, SAREF["Sensor"]),  # Design decisions...
+        hc.Platform.BINARY_SENSOR: (False, SAREF["Sensor"]),  # Modelling design decisions...
         hc.Platform.BUTTON: (True, SAREF["Sensor"]),
         hc.Platform.CALENDAR: None,
         hc.Platform.CAMERA: (True, SAREF["Device"]),
@@ -701,7 +706,7 @@ def setupSAREF():
         hc.Platform.SENSOR: (False, SAREF["Sensor"]),
         hc.Platform.SIREN: (True, SAREF["Appliance"]),
         hc.Platform.STT: None,
-        hc.Platform.SWITCH: (True, SAREF["Switch"]),
+        hc.Platform.SWITCH: (False, SAREF["Switch"]),  # Modelling.
         hc.Platform.TEXT: None,
         hc.Platform.TTS: None,
         hc.Platform.UPDATE: None,
