@@ -11,8 +11,10 @@ from homeassistant.components import (
     device_automation,
     fan,
     light,
+    mqtt,
     remote,
     sensor,
+    sun,
     switch,
     zone,
 )
@@ -20,7 +22,9 @@ import homeassistant.components.button.device_action
 import homeassistant.components.climate.device_action
 import homeassistant.components.fan.device_action
 import homeassistant.components.light.device_action
+import homeassistant.components.mqtt.device_trigger
 import homeassistant.components.switch.device_action
+import homeassistant.components.zone.trigger
 
 # Import some constants for later use: obviously this ain't gonna scale!
 from homeassistant.components.binary_sensor.device_trigger import CONF_MOTION, CONF_NO_MOTION
@@ -71,7 +75,7 @@ def mkname(name):
     return name.replace(" ", "_").replace("/", "_")
 
 
-def mkEntityURI(MINE, entity_id):
+def mkEntityURI(MINE, entity_id) -> tuple[URIRef, str]:
     global p_counter
     # TODO: Not sure what we want to assume here for uniqueness...probably want to keep domain.name instead of
     #  discarding it? Note that adding may happen somewhere else, as does setting a `friendly name` if it exists.
@@ -353,6 +357,7 @@ def handleAutomation(master, HASS, MINE, a, a_name, g):
             #  most importantly `entity_id`
             if t[cv.CONF_PLATFORM] == "device":
                 trigger_device = mkDevice(MINE, t['device_id'])
+                g.add((o_trigger, HASS['device'], trigger_device))
                 trigger_type = HASS["type/" + t['type']]  # TODO: static? May not be possible/effective,
                 # ...since there's no global super-container? This must be INSIDE Homeassistant!
                 # What I don't know is if the triggers etc. are installed even though you're not using the integration...
@@ -372,15 +377,61 @@ def handleAutomation(master, HASS, MINE, a, a_name, g):
                     logging.warning(f"not handling trigger {t} yet.")
                     pass
                 g.add((o_trigger, RDF.type, trigger_type))
-                # TODO: investigate warning on line below
-                g.add((o_action_instance, HASS['hasTrigger'], o_trigger))
             elif t[cv.CONF_PLATFORM] == zone.const.DOMAIN:
-                pass
+                e_id = t[hc.CONF_ENTITY_ID]  # already done
+                e_zone = t[hc.CONF_ZONE]
+                o_zone, _ = mkEntityURI(MINE, e_zone)
+                e_event = t[hc.CONF_EVENT]
+                trigger_type = HASS["type/ZoneTrigger"]
+                g.add((o_trigger, RDF.type, trigger_type))
+                mkDirectAttribute(HASS, hc.CONF_EVENT, g, o_trigger, t)
+                g.add((o_trigger, HASS['zone'], o_zone))
+            elif t[hc.CONF_PLATFORM] == "numeric_state":
+                trigger_type = HASS["type/NumericStateTrigger"]
+                g.add((o_trigger, RDF.type, trigger_type))
+                #             vol.Required(CONF_PLATFORM): "numeric_state",
+                #             vol.Required(CONF_ENTITY_ID): cv.entity_ids_or_uuids,
+                #             vol.Optional(CONF_BELOW): cv.NUMERIC_STATE_THRESHOLD_SCHEMA,
+                #             vol.Optional(CONF_ABOVE): cv.NUMERIC_STATE_THRESHOLD_SCHEMA,
+                #             vol.Optional(CONF_VALUE_TEMPLATE): cv.template,
+                #             vol.Optional(CONF_FOR): cv.positive_time_period_template,
+                #             vol.Optional(CONF_ATTRIBUTE): cv.match_all,
+                mkDirectAttribute(HASS, hc.CONF_ABOVE, g, o_trigger, t)
+                mkDirectAttribute(HASS, hc.CONF_BELOW, g, o_trigger, t)
+                mkDirectAttribute(HASS, hc.CONF_ATTRIBUTE, g, o_trigger, t)
+            elif t[cv.CONF_PLATFORM] == sun.const.DOMAIN:
+                e_event = t[hc.CONF_EVENT]
+                offset = t[hc.CONF_OFFSET]
+                trigger_type = HASS["type/SunTrigger"]
+                g.add((o_trigger, RDF.type, trigger_type))
+                mkDirectAttribute(HASS, hc.CONF_EVENT, g, o_trigger, t)
+                mkDirectAttribute(HASS, hc.CONF_OFFSET, g, o_trigger, t)
+            elif t[cv.CONF_PLATFORM] == "mqtt":
+                #         vol.Required(CONF_PLATFORM): mqtt.DOMAIN,
+                #         vol.Required(CONF_TOPIC): mqtt.util.valid_subscribe_topic_template,
+                #         vol.Optional(CONF_PAYLOAD): cv.template,
+                #         vol.Optional(CONF_VALUE_TEMPLATE): cv.template,
+                #         vol.Optional(CONF_ENCODING, default=DEFAULT_ENCODING): cv.string,
+                #         vol.Optional(CONF_QOS, default=DEFAULT_QOS): vol.All(
+                #             vol.Coerce(int), vol.In([0, 1, 2])
+                #         ),
+                trigger_type = HASS["type/MQTTTrigger"]
+                g.add((o_trigger, RDF.type, trigger_type))
+                mkDirectAttribute(HASS, mqtt.device_trigger.CONF_TOPIC, g, o_trigger, t)
             else:
                 logging.warning(f"not handling trigger platform {t[cv.CONF_PLATFORM]}: {t}.")
+                continue
+            # TODO: investigate warning on line below
+            g.add((o_action_instance, HASS['hasTrigger'], o_trigger))
+
     for a_condition in a_config['condition']:
         for c in cv.CONDITION_SCHEMA(a_condition):
             pass  # TODO
+
+
+def mkDirectAttribute(HASS, attribute, g, o_trigger, t):
+    if attribute in t:
+        g.add((o_trigger, HASS[attribute], Literal(t[attribute])))
 
 
 def process_target_schema(HASS, MINE, g, o_action_instance, service_id, target):
@@ -490,11 +541,16 @@ def handle_entity(HASS, MINE, SAREF, class_to_saref, device: Optional[str], e, g
     if domain in cs.getServices():
         for service in cs.getServices()[domain]:
             skip = False
-            if domain == hc.Platform.CLIMATE:
+
+            if domain == hc.Platform.BUTTON:
+                pass
+            elif domain == hc.Platform.CLIMATE:
                 skip = service == climate.const.SERVICE_SET_FAN_MODE and not features & climate.ClimateEntityFeature.FAN_MODE
                 skip |= service == climate.const.SERVICE_SET_HUMIDITY and not features & climate.ClimateEntityFeature.TARGET_HUMIDITY
                 skip |= service == climate.const.SERVICE_SET_PRESET_MODE and not features & climate.ClimateEntityFeature.PRESET_MODE
                 skip |= service == climate.const.SERVICE_SET_SWING_MODE and not features & climate.ClimateEntityFeature.SWING_MODE
+            elif domain == hc.Platform.DEVICE_TRACKER:
+                pass
             elif domain == hc.Platform.REMOTE:
                 skip = service == remote.SERVICE_LEARN_COMMAND and not features & remote.RemoteEntityFeature.LEARN_COMMAND
                 skip |= service == remote.SERVICE_DELETE_COMMAND and not features & remote.RemoteEntityFeature.DELETE_COMMAND
@@ -749,6 +805,26 @@ def setupSAREF():
     g.add((prop_has_trigger, RDF.type, OWL.ObjectProperty))
     g.add((prop_has_trigger, RDFS.domain, HASS['action/Action']))
     g.add((prop_has_trigger, RDFS.range, tt))
+
+    prop_has_entity = HASS['trigger_entity']
+    g.add((prop_has_entity, RDF.type, OWL.ObjectProperty))
+    g.add((prop_has_entity, RDFS.domain, tt))
+    g.add((prop_has_entity, RDFS.range, SAREF['Device']))
+
+    zt = HASS["type/ZoneTrigger"]
+    g.add((zt, RDFS.subClassOf, tt))
+    prop = HASS['event']
+    g.add((prop, RDF.type, OWL.DatatypeProperty))
+    g.add((zt, RDFS.subClassOf, prop))
+    prop = HASS['zone']
+    g.add((prop, RDF.type, OWL.ObjectProperty))
+    g.add((prop, RDFS.domain, zt))
+    g.add((prop, RDFS.range, SAREF['Device']))
+
+    st = HASS["type/SunTrigger"]
+    g.add((st, RDFS.subClassOf, tt))
+    # Event, Offset
+
 
     # Model platforms -- unclear if we'll really need this in the future,
     #  but useful for i) a complete metamodel ii) for cross-referencing.
