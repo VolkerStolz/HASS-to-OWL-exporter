@@ -1,5 +1,6 @@
 forcediphttpsadapter
 homeassistant~=2022.12.7
+numpy
 PyYAML
 requests
 rdflib
