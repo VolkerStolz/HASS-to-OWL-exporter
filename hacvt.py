@@ -104,7 +104,15 @@ def mkLocationURI(MINE, name):
 
 def main():
     g = Graph(bind_namespaces="core")
-    MINE, HASS, SAREF, S4BLDG, class_to_saref = setupSAREF(g)
+    MINE, HASS, SAREF, S4BLDG, class_to_saref = setupSAREF(g, importsOnly=False)
+    # Save metamodel:
+    f_out = open("homeassistantcore.rdf", "w")
+    print(g.serialize(format='application/rdf+xml'), file=f_out)
+    # ... and get us a fresh graph:
+    g = Graph(bind_namespaces="core")
+    MINE, HASS, SAREF, S4BLDG, _ = setupSAREF(g, importsOnly=True)
+    g.add((URIRef(str(MINE)), OWL.imports, URIRef(str(HASS))))
+
     # Load known types:
     master = Graph()
     master.parse("https://saref.etsi.org/core/v3.1.1/saref.ttl")
@@ -371,7 +379,7 @@ def handleAutomation(master, HASS, MINE, a, a_name, g):
                 trigger_device = mkDevice(MINE, t['device_id'])
                 g.add((o_trigger, HASS['device'], trigger_device))
                 trigger_type = HASS["type/" + t['type']]  # TODO: static? May not be possible/effective,
-                # ...since there's no global super-container? This must be INSIDE Homeassistant!
+                # ...since there's no global super-container? This must be INSIDE Homeassistant! #5
                 # What I don't know is if the triggers etc. are installed even though you're not using the integration...
                 g.add((trigger_type, RDFS.subClassOf, HASS["type/TriggerType"]))
                 # Does this code below does scale? Of course we could enumerate all Sensor/BinarySensor types.
@@ -398,6 +406,10 @@ def handleAutomation(master, HASS, MINE, a, a_name, g):
                 g.add((o_trigger, RDF.type, trigger_type))
                 mkDirectAttribute(HASS, hc.CONF_EVENT, g, o_trigger, t)
                 g.add((o_trigger, HASS['zone'], o_zone))
+            elif t[hc.CONF_PLATFORM] == "state":
+                # TODO: from/to literals
+                trigger_type = HASS["type/StateTrigger"]
+                g.add((o_trigger, RDF.type, trigger_type))
             elif t[hc.CONF_PLATFORM] == "numeric_state":
                 trigger_type = HASS["type/NumericStateTrigger"]
                 g.add((o_trigger, RDF.type, trigger_type))
@@ -490,9 +502,8 @@ def handle_entity(HASS, MINE, SAREF, class_to_saref, device: Optional[str], e, g
     # if device is not None and domain not in class_to_saref:
     if domain not in class_to_saref:
         if device is None:
-            c = HASS[domain.title()]
-            # TODO: could be new, create super-class?
-            logging.error(f"Need super-class for {c}?")
+            c = HASS["platform/"+domain.title()]  # TODO: Review
+            g.add((c, RDFS.subClassOf, HASS['platform/Platform']))
         else:
             # TODO
             c = SAREF['Device']
@@ -542,8 +553,6 @@ def handle_entity(HASS, MINE, SAREF, class_to_saref, device: Optional[str], e, g
     # multiple platforms are projected onto the same SAREF Device.
     # TODO: Check with Fernando if this single instance here is an anti-pattern.
     # Or is our superclass like hass:Zone good enough?
-    # Create Platform subclass on the fly:
-    g.add((HASS['platform/' + domain.title()], RDFS.subClassOf, HASS['platform/Platform']))  # dupes...
     # Create instance (is MINE a good choice here?):
     g.add((MINE[domain.title() + "_platform"], RDF.type, HASS['platform/' + domain.title()]))
     g.add((e_d, HASS['provided_by'], MINE[domain.title() + "_platform"]))
@@ -615,6 +624,7 @@ def handle_entity(HASS, MINE, SAREF, class_to_saref, device: Optional[str], e, g
             #  even in `g` that way!
             if q_o is None:
                 # TODO: should search in the same way as `hasEntity` above.
+                # Note: Still injects HASS types into instance (#5)
                 q_o = createPropertyIfMissing(HASS, SAREF, g, q)
             # ...and instance:
             # TODO: should this be shared, ie. do we want different sensor measuring the same property?
@@ -637,6 +647,7 @@ def handle_entity(HASS, MINE, SAREF, class_to_saref, device: Optional[str], e, g
                 unit = SAREF['PressureUnit']
             else:  # Not built-in.
                 # TODO: check -- are we done here?
+                # Should get them from HA core statically. (#5)
                 unit = HASS[mkname(q)]
                 g.add((unit, RDFS.subClassOf, SAREF['UnitOfMeasure']))
                 # TODO: add Measurement/Property
@@ -698,11 +709,11 @@ def hasEntity(graph, ns, cl, q):
     return None
 
 
-def setupSAREF(g):
+def setupSAREF(g, importsOnly=False):
     SAREF = Namespace("https://saref.etsi.org/core/")
     S4BLDG = Namespace("https://saref.etsi.org/saref4bldg/")
-    HASS = Namespace("http://home-assistant.io/")
-    HASS_ACTION = Namespace("http://home-assistant.io/action/")
+    HASS = Namespace("https://www.foldr.org/profiles/homeassistant/")
+    HASS_ACTION = HASS.term("action/")
     g.bind("saref", SAREF)
     g.bind("owl", OWL)
     g.bind("s4bldg", S4BLDG)
@@ -713,15 +724,22 @@ def setupSAREF(g):
     MINE_AUTOMATION = Namespace("http://my.name.spc/automation/")
     MINE_ENTITY = Namespace("http://my.name.spc/entity/")
     MINE_SERVICE = Namespace("http://my.name.spc/service/")
+    if importsOnly:
+        saref_import = URIRef(str(MINE))
+    else:
+        saref_import = URIRef(str(HASS))
+    g.add((saref_import, RDF.type, OWL.Ontology))
+    g.add((saref_import, OWL.imports, URIRef(str(SAREF))))
+    g.add((saref_import, OWL.imports, URIRef(str(S4BLDG))))
+
+    if importsOnly:
+        return MINE, HASS, SAREF, S4BLDG, None
+
     g.bind("mine", MINE)
     g.bind("action", MINE_ACTION)
     g.bind("automation", MINE_AUTOMATION)
     g.bind("entity", MINE_ENTITY)
     g.bind("service", MINE_SERVICE)
-    saref_import = URIRef(str(MINE))
-    g.add((saref_import, RDF.type, OWL.Ontology))
-    g.add((saref_import, OWL.imports, URIRef(str(SAREF))))
-    g.add((saref_import, OWL.imports, URIRef(str(S4BLDG))))
 
     # Experimental
     # Manual entities, e.g. from "lights":
@@ -822,11 +840,19 @@ def setupSAREF(g):
     g.add((prop_has_entity, RDFS.domain, tt))
     g.add((prop_has_entity, RDFS.range, SAREF['Device']))
 
+    trigger_type = HASS["type/NumericStateTrigger"]
+    g.add((trigger_type, RDFS.subClassOf, HASS["type/TriggerType"]))
+    trigger_type = HASS["type/MQTTTrigger"]
+    g.add((trigger_type, RDFS.subClassOf, HASS["type/TriggerType"]))
+    trigger_type = HASS["type/StateTrigger"]
+    g.add((trigger_type, RDFS.subClassOf, HASS["type/TriggerType"]))
+
     zt = HASS["type/ZoneTrigger"]
     g.add((zt, RDFS.subClassOf, tt))
-    prop = HASS['event']
-    g.add((prop, RDF.type, OWL.DatatypeProperty))
-    g.add((zt, RDFS.subClassOf, prop))
+    # TODO: Uhhh...forgot?
+    # prop = HASS['event']
+    # g.add((prop, RDF.type, OWL.DatatypeProperty))
+    # g.add((zt, RDFS.subClassOf, prop))
     prop = HASS['zone']
     g.add((prop, RDF.type, OWL.ObjectProperty))
     g.add((prop, RDFS.domain, zt))
@@ -835,7 +861,6 @@ def setupSAREF(g):
     st = HASS["type/SunTrigger"]
     g.add((st, RDFS.subClassOf, tt))
     # Event, Offset
-
 
     # Model platforms -- unclear if we'll really need this in the future,
     #  but useful for i) a complete metamodel ii) for cross-referencing.
@@ -849,13 +874,8 @@ def setupSAREF(g):
     g.add((h_prov, RDFS.range, ha_platform))
 
     for p in hc.Platform:
-        g.add((HASS['platform/' + p.title()], RDF.type, ha_platform))
+        g.add((HASS['platform/' + p.title()], RDFS.subClassOf, ha_platform))
     # END
-
-    # TODO: Export HASS schema as separate file and import in model, instead of having it in the graph. (#5)
-    # TODO: Should probably be in a class...
-    # f_out = open("homeassistantcore.ttl", "w")
-    # print(g.serialize(format='turtle'), file=f_out)
 
     return MINE, HASS, SAREF, S4BLDG, class_to_saref
 
