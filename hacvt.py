@@ -79,12 +79,16 @@ def mkEntityURI(MINE, entity_id) -> tuple[URIRef, str]:
     global p_counter
     # TODO: Not sure what we want to assume here for uniqueness...probably want to keep domain.name instead of
     #  discarding it? Note that adding may happen somewhere else, as does setting a `friendly name` if it exists.
-    e_platform, e_name = ha.split_entity_id(entity_id)
-    # we use a white-list in the privacy filter:
-    if privacy_filter is not None and e_platform not in privacy_filter:
-        e_name = "entity_" + str(p_counter)
-        p_counter = p_counter + 1
-    return MINE["entity/" + e_platform + "_" + mkname(e_name)], e_name
+    try:
+        e_platform, e_name = ha.split_entity_id(entity_id)
+        # we use a white-list in the privacy filter:
+        if privacy_filter is not None and e_platform not in privacy_filter:
+            e_name = "entity_" + str(p_counter)
+            p_counter = p_counter + 1
+        return MINE["entity/" + e_platform + "_" + mkname(e_name)], e_name
+    except:
+        logging.fatal(f"Can't process URI {entity_id}.")
+        raise
 
 
 def mkLocationURI(MINE, name):
@@ -99,7 +103,8 @@ def mkLocationURI(MINE, name):
 # - escape "/" in names!
 
 def main():
-    g, MINE, HASS, SAREF, S4BLDG, class_to_saref = setupSAREF()
+    g = Graph(bind_namespaces="core")
+    MINE, HASS, SAREF, S4BLDG, class_to_saref = setupSAREF(g)
     # Load known types:
     master = Graph()
     master.parse("https://saref.etsi.org/core/v3.1.1/saref.ttl")
@@ -349,6 +354,13 @@ def handleAutomation(master, HASS, MINE, a, a_name, g):
 
             e_id = t['entity_id'] if 'entity_id' in t else None
             if e_id is not None:
+                # This can actually be a list.
+                # TODO: isn't there a schema that should list this for us?
+                if isinstance(e_id, list):
+                    assert len(e_id) > 0
+                    if len(e_id) > 1:
+                        logging.critical("Found a trigger with multiple entities. Cowardly refusing to process anything but the first.")
+                    e_id = e_id[0]
                 trigger_entity, _ = mkEntityURI(MINE, e_id)
                 g.add((o_trigger, HASS['trigger_entity'], trigger_entity))
 
@@ -686,8 +698,7 @@ def hasEntity(graph, ns, cl, q):
     return None
 
 
-def setupSAREF():
-    g = Graph(bind_namespaces="core")
+def setupSAREF(g):
     SAREF = Namespace("https://saref.etsi.org/core/")
     S4BLDG = Namespace("https://saref.etsi.org/saref4bldg/")
     HASS = Namespace("http://home-assistant.io/")
@@ -843,7 +854,10 @@ def setupSAREF():
 
     # TODO: Export HASS schema as separate file and import in model, instead of having it in the graph. (#5)
     # TODO: Should probably be in a class...
-    return g, MINE, HASS, SAREF, S4BLDG, class_to_saref
+    # f_out = open("homeassistantcore.ttl", "w")
+    # print(g.serialize(format='turtle'), file=f_out)
+
+    return MINE, HASS, SAREF, S4BLDG, class_to_saref
 
 
 if __name__ == "__main__":
