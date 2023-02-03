@@ -33,7 +33,7 @@ from homeassistant.components.binary_sensor.device_trigger import CONF_MOTION, C
 from functools import cache
 import logging
 from rdflib import Literal, Graph, URIRef
-from rdflib.namespace import Namespace, RDF, RDFS, OWL
+from rdflib.namespace import Namespace, RDF, RDFS, OWL, XSD
 from typing import Optional
 
 from ConfigSource import RESTSource
@@ -407,9 +407,10 @@ def handleAutomation(master, HASS, MINE, a, a_name, g):
                 mkDirectAttribute(HASS, hc.CONF_EVENT, g, o_trigger, t)
                 g.add((o_trigger, HASS['zone'], o_zone))
             elif t[hc.CONF_PLATFORM] == "state":
-                # TODO: from/to literals
                 trigger_type = HASS["type/StateTrigger"]
                 g.add((o_trigger, RDF.type, trigger_type))
+                g.add((o_trigger, HASS['from'], Literal(t['from'])))
+                g.add((o_trigger, HASS['to'], Literal(t['to'])))
             elif t[hc.CONF_PLATFORM] == "numeric_state":
                 trigger_type = HASS["type/NumericStateTrigger"]
                 g.add((o_trigger, RDF.type, trigger_type))
@@ -844,8 +845,14 @@ def setupSAREF(g, importsOnly=False):
     g.add((trigger_type, RDFS.subClassOf, HASS["type/TriggerType"]))
     trigger_type = HASS["type/MQTTTrigger"]
     g.add((trigger_type, RDFS.subClassOf, HASS["type/TriggerType"]))
+
     trigger_type = HASS["type/StateTrigger"]
     g.add((trigger_type, RDFS.subClassOf, HASS["type/TriggerType"]))
+    for prop in ['from', 'to']:
+        prop_has_entity = HASS[prop]
+        g.add((prop_has_entity, RDF.type, OWL.DatatypeProperty))
+        g.add((prop_has_entity, RDFS.domain, trigger_type))
+        g.add((prop_has_entity, RDFS.range, XSD.string))
 
     zt = HASS["type/ZoneTrigger"]
     g.add((zt, RDFS.subClassOf, tt))
