@@ -119,6 +119,7 @@ def main():
 
     the_devices = cs.getDevices()
     for d in the_devices:
+        d_g = mkDevice(MINE, d)
         # https://github.com/home-assistant/core/blob/dev/homeassistant/helpers/device_registry.py
         # For these we don't have constants.
         # TODO: table-based conversion, manufacturer -> hasManufacturer,
@@ -130,11 +131,17 @@ def main():
         entry_type = cs.getDeviceAttr(d, 'entry_type')
         if not entry_type == "None":
             logging.info(f"Found {d} {name} as: {entry_type}")
+            g.add((d_g, HASS["entry_type"], Literal(entry_type)))
 
-        d_g = mkDevice(MINE, d)
-        # TODO: The following is of course already a design-decision. We just create a container w/o particular type.
-        # TODO: Discuss with Fernando & Eduard.
-        g.add((d_g, RDF.type, SAREF['Device']))
+        # We create a super-class from the model. Eg. we have identical light bulbs, or motion sensors, or...
+        d_super = MINE['device/' + mkname(manufacturer)+"_"+mkname(model)]
+        g.add((d_super, RDFS.subClassOf, SAREF['Device']))
+
+        # The following is of course already a design-decision. We just create a container w/o particular type.
+        # That's what the SAREF-people did in the windmill-example.
+        g.add((d_g, RDF.type, d_super))
+        # TODO: it feels a bit weird to slap values onto a (singleton-) type, so we do it on each instance.
+        #  Check with Fernando.
         g.add((d_g, SAREF['hasManufacturer'], Literal(manufacturer)))
         g.add((d_g, SAREF['hasModel'], Literal(model)))
 
@@ -207,6 +214,7 @@ def mkDevice(MINE, device_id):
         d2_name = "device_" + str(p_counter)
         p_counter = p_counter + 1
     else:
+        # TODO: Defer this in favour of RDFS.label
         d2_name_by_user = cs.getDeviceAttr(device_id, 'name_by_user')
     return MINE[mkname(d2_name if d2_name_by_user == "None" else d2_name_by_user)]
 
@@ -311,15 +319,18 @@ def handleAutomation(master, HASS, MINE, a, a_name, g):
                     # default: -10
                     # TODO: Review with Fernando
                     # TODO: superclass + attributes
-                    g.add((o_action_instance, RDFS.subClassOf, HASS['LIGHT_ACTION_CHANGE_BRIGHTNESS']))
+                    g.remove((o_action_instance, RDF.type, None))
+                    g.add((o_action_instance, RDF.type, HASS['action/LIGHT_ACTION_CHANGE_BRIGHTNESS']))
                     g.add((o_action_instance, HASS['changeBrightnessBy'], Literal(opt_bright_pct if opt_bright_pct is not None else -10)))
                 elif type == light.device_action.TYPE_BRIGHTNESS_INCREASE:
                     # default: +10
-                    g.add((o_action_instance, RDFS.subClassOf, HASS['LIGHT_ACTION_CHANGE_BRIGHTNESS']))
+                    g.remove((o_action_instance, RDF.type, None))
+                    g.add((o_action_instance, RDF.type, HASS['action/LIGHT_ACTION_CHANGE_BRIGHTNESS']))
                     g.add((o_action_instance, HASS['changeBrightnessBy'], Literal(opt_bright_pct if opt_bright_pct is not None else 10)))
                 elif type == light.device_action.TYPE_FLASH:
                     # default = short according to source.
-                    g.add((o_action_instance, RDFS.subClassOf, HASS['LIGHT_ACTION_FLASH']))
+                    g.remove((o_action_instance, RDF.type, None))
+                    g.add((o_action_instance, RDF.type, HASS['action/LIGHT_ACTION_FLASH']))
                     g.add((o_action_instance, HASS['flashLength'], Literal(opt_flash if opt_flash is not None else "short")))
                 else:
                     logging.fatal(f"Unsupported type in: {config}")
@@ -750,7 +761,7 @@ def setupSAREF(g, importsOnly=False):
 
     # Inject Service-classes
     # Note that using /api/services only gives you the services of your instance. Here, we want to create
-    #  the metamodel/profile for HA, so we use the CSV generated from a git-checkout.
+    #  the metamodel/profile for HA, so we should use data from a git-checkout...
     # We still need a static map to SAREF.
 
     hass_svcs = mkServiceToDomainTable()
@@ -884,14 +895,15 @@ def setupSAREF(g, importsOnly=False):
         g.add((HASS['platform/' + p.title()], RDFS.subClassOf, ha_platform))
     # END
 
-    # Actions?
-    g.add((HASS['action/LIGHT_ACTION_CHANGE_BRIGHTNESS'], RDFS.subClassOf, HASS['action/Action']))
+    # Actions
+    # This are manually from /lights, which has these actions but not services.
+    g.add((HASS['action/LIGHT_ACTION_CHANGE_BRIGHTNESS'], RDFS.subClassOf, HASS['action/Device']))
     prop_has_entity = HASS['changeBrightnessBy']
     g.add((prop_has_entity, RDF.type, OWL.DatatypeProperty))
     g.add((prop_has_entity, RDFS.domain, HASS['action/LIGHT_ACTION_CHANGE_BRIGHTNESS']))
     g.add((prop_has_entity, RDFS.range, XSD.string))  # Can't be bothered to find out if int or float.
 
-    g.add((HASS['action/LIGHT_ACTION_FLASH'], RDFS.subClassOf, HASS['action/Action']))
+    g.add((HASS['action/LIGHT_ACTION_FLASH'], RDFS.subClassOf, HASS['action/Device']))
     prop_has_entity = HASS['flashLength']
     g.add((prop_has_entity, RDF.type, OWL.DatatypeProperty))
     g.add((prop_has_entity, RDFS.domain, HASS['action/LIGHT_ACTION_FLASH']))
