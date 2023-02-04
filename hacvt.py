@@ -150,7 +150,7 @@ def main():
         # END Area
 
         # Handle `via_device` if present.
-        via = cs.getDeviceAttr(d, 'via_device')
+        via = cs.getDeviceAttr(d, hc.ATTR_VIA_DEVICE)
         if via != "None":
             # Matches construction of d_g above:
             other = mkDevice(MINE, via)
@@ -312,15 +312,15 @@ def handleAutomation(master, HASS, MINE, a, a_name, g):
                     # TODO: Review with Fernando
                     # TODO: superclass + attributes
                     g.add((o_action_instance, RDFS.subClassOf, HASS['LIGHT_ACTION_CHANGE_BRIGHTNESS']))
-                    g.add((o_action_instance, HASS['changeBrightness'], Literal(opt_bright_pct if opt_bright_pct is not None else -10)))
+                    g.add((o_action_instance, HASS['changeBrightnessBy'], Literal(opt_bright_pct if opt_bright_pct is not None else -10)))
                 elif type == light.device_action.TYPE_BRIGHTNESS_INCREASE:
                     # default: +10
                     g.add((o_action_instance, RDFS.subClassOf, HASS['LIGHT_ACTION_CHANGE_BRIGHTNESS']))
-                    g.add((o_action_instance, HASS['changeBrightness'], Literal(opt_bright_pct if opt_bright_pct is not None else 10)))
+                    g.add((o_action_instance, HASS['changeBrightnessBy'], Literal(opt_bright_pct if opt_bright_pct is not None else 10)))
                 elif type == light.device_action.TYPE_FLASH:
                     # default = short according to source.
                     g.add((o_action_instance, RDFS.subClassOf, HASS['LIGHT_ACTION_FLASH']))
-                    g.add((o_action_instance, HASS['flash'], Literal(opt_flash if opt_flash is not None else "short")))
+                    g.add((o_action_instance, HASS['flashLength'], Literal(opt_flash if opt_flash is not None else "short")))
                 else:
                     logging.fatal(f"Unsupported type in: {config}")
 
@@ -765,7 +765,7 @@ def setupSAREF(g, importsOnly=False):
         #    g.add((HASS[s], MINE['provided'], HASS[d]))
 
     # Let's patch SAREF a bit with our extensions:
-    # True/False could be replace by having the HASS-ns on the RHS.
+    # True/False could be replaced by having the HASS-ns on the RHS.
     class_to_saref = {
         hc.Platform.AIR_QUALITY: (True, SAREF["Sensor"]),
         hc.Platform.ALARM_CONTROL_PANEL: (True, SAREF["Device"]),
@@ -884,6 +884,20 @@ def setupSAREF(g, importsOnly=False):
         g.add((HASS['platform/' + p.title()], RDFS.subClassOf, ha_platform))
     # END
 
+    # Actions?
+    g.add((HASS['action/LIGHT_ACTION_CHANGE_BRIGHTNESS'], RDFS.subClassOf, HASS['action/Action']))
+    prop_has_entity = HASS['changeBrightnessBy']
+    g.add((prop_has_entity, RDF.type, OWL.DatatypeProperty))
+    g.add((prop_has_entity, RDFS.domain, HASS['action/LIGHT_ACTION_CHANGE_BRIGHTNESS']))
+    g.add((prop_has_entity, RDFS.range, XSD.string))  # Can't be bothered to find out if int or float.
+
+    g.add((HASS['action/LIGHT_ACTION_FLASH'], RDFS.subClassOf, HASS['action/Action']))
+    prop_has_entity = HASS['flashLength']
+    g.add((prop_has_entity, RDF.type, OWL.DatatypeProperty))
+    g.add((prop_has_entity, RDFS.domain, HASS['action/LIGHT_ACTION_FLASH']))
+    g.add((prop_has_entity, RDFS.range, XSD.boolean))  # long/short
+
+    # END
     return MINE, HASS, SAREF, S4BLDG, class_to_saref
 
 
