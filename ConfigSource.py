@@ -22,12 +22,13 @@ class RESTSource(ConfigSource):
     def __init__(self, parser: argparse.ArgumentParser):
         parser.add_argument('url',
                             help='Full path to API, e.g. https://homeassistant.local:8123/api/.')
-        parser.add_argument('token', metavar='TOKEN',
-                            help='Name of environment variable where you keep your long-lived access token.')
+        parser.add_argument('token', metavar='TOKENVAR',
+                            help='Name of environment variable where you keep your long-lived access token. NOT THE LITERAL TOKEN!')
         parser.add_argument('-m', '--mount', metavar='192.0.2.1',
-                            help='Use ForcedIPHTTPSAdapter to override IP for URL.')
+                            help='Use ForcedIPHTTPSAdapter to override IP for URL; useful on internal IPs.')
         parser.add_argument('-c', '--certificate', metavar='ca.crt',
-                            help='Path a CA certificate to validate your https-connection if needed.')
+                            help='Path to a CA certificate to validate your https-connection if needed. The string'
+                                 ' "None" will disable validation.')
         args = parser.parse_args()  # TODO: could be more modular in the future
         self.args = args  # We may need the results outside.
         token = os.getenv(args.token)
@@ -44,7 +45,10 @@ class RESTSource(ConfigSource):
         if args.mount is not None:
             self.session.mount(args.url, ForcedIPHTTPSAdapter(dest_ip=args.mount))
         if args.certificate is not None:
-            self.session.verify = args.certificate
+            if args.certificate == "None":
+                self.session.verify = None
+            else:
+                self.session.verify = args.certificate
 
     def getYAML(self, query):
         http_data = {'template': '{{ ' + query + ' }}'}

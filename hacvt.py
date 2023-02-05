@@ -43,6 +43,8 @@ from ConfigSource import RESTSource
 parser = argparse.ArgumentParser()
 parser.add_argument('-d', '--debug', default='INFO', const='DEBUG', nargs='?',
                       help="Set Python log level. INFO if not set, otherwise DEBUG or your value here is used.")
+parser.add_argument('-o', '--out', default='ha.ttl',
+                      help="Set output filename; `ha.ttl` by default.")
 parser.add_argument('-p', '--privacy', nargs='*', metavar='platform*',
                     help="Enable privacy filter. `-p` gives a sensible default, otherwise use `-p person zone ...` to "
                          "specify whitelist -- any other entities NOT in the filter will have their name replaced.")
@@ -210,7 +212,7 @@ def main():
             handle_entity(HASS, MINE, SAREF, class_to_saref, None, e['entity_id'], g, master)
 
     # Print Turtle output both to file and console:
-    f_out = open("ha.ttl", "w")
+    f_out = open(cs.args.out, "w")
     print(g.serialize(format='turtle'), file=f_out)
     print(g.serialize(format='turtle'))
     exit(0)
