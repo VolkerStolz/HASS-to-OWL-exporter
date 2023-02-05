@@ -1,3 +1,5 @@
+import argparse
+
 import homeassistant.const as hc
 import homeassistant.core as ha
 from homeassistant.helpers.trigger import _PLATFORM_ALIASES
@@ -38,34 +40,41 @@ from typing import Optional
 
 from ConfigSource import RESTSource
 
-logging.basicConfig(level='INFO', format='%(levelname)s: %(message)s')
-
-cs = RESTSource()  # Use REST API. Configure `config.py`!
+parser = argparse.ArgumentParser()
+parser.add_argument('-d', '--debug', default='INFO', const='DEBUG', nargs='?',
+                      help="Set Python log level. INFO if not set, otherwise DEBUG or your value here is used.")
+parser.add_argument('-p', '--privacy', nargs='*', metavar='platform*',
+                    help="Enable privacy filter. `-p` gives a sensible default, otherwise use `-p person zone ...")
+# TODO: Add output filename
+# TODO: Add privacy filter option to command line
+cs = RESTSource(parser)
+logging.basicConfig(level=cs.args.debug, format='%(levelname)s: %(message)s')
 
 # BEGIN Privacy settings:
 p_counter = 0  # Used to enumerate privatized entity names
-# Adjust the following to preserve device/entity names. We first take the default platforms,
+
 # then some common ones. Set to privacy_filter to None to disable. The code-layout here should make it
 # easy to comment out/in individual items.
-privacy_filter = set(list(hc.Platform))
-# Identifier for devices in your system:
-privacy_filter.add("device")
-# Useful components that we usually want exported that are not part of home-assistant's core:
-for p in {"climate", "input_datetime", "sun", "time"}:
-    privacy_filter.add(p)
-# Common things that you may want to adjust to keep them private and that are not part of the based platforms:
-privacy_filter.discard("device_tracker")  # Anonymize your mobile devices if you use the app.
-# privacy_filter.add("person")              # Export our accounts in home-assistant.
-privacy_filter.add("area")  # Export your self-defined area-names...
-privacy_filter.add("zone")  # ... and zones.
-# Final switch to export everything unfiltered, overriding anything above:
-privacy_filter = None
+if cs.args.privacy is None:
+    privacy_filter = None  # No switch on command line
+elif len(cs.args.privacy) == 0:  # Just -p
+    privacy_filter = set(str(p) for p in hc.Platform)
+    # Identifier for devices in your system:
+    privacy_filter.add("device")
+    # Useful components that we usually want exported that are not part of home-assistant's core:
+    for p in {"climate", "input_datetime", "sun", "time"}:
+        privacy_filter.add(p)
+    # Common things that you may want to adjust to keep them private and that are not part of the based platforms:
+    privacy_filter.discard("device_tracker")  # Anonymize your mobile devices if you use the app.
+    # privacy_filter.add("person")              # Export our accounts in home-assistant.
+    privacy_filter.add("area")  # Export your self-defined area-names...
+    privacy_filter.add("zone")  # ... and zones.
+else:  # -p platform1 platform2 ...
+    privacy_filter = set(cs.args.privacy)
 
 # Log what we're doing:
 msg = "ALL" if privacy_filter is None else str(privacy_filter)
 logging.info(f"Preserving entities: {msg}")
-
-
 # END Privacy settings
 
 
