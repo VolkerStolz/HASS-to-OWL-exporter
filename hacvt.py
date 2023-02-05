@@ -44,9 +44,9 @@ parser = argparse.ArgumentParser()
 parser.add_argument('-d', '--debug', default='INFO', const='DEBUG', nargs='?',
                       help="Set Python log level. INFO if not set, otherwise DEBUG or your value here is used.")
 parser.add_argument('-p', '--privacy', nargs='*', metavar='platform*',
-                    help="Enable privacy filter. `-p` gives a sensible default, otherwise use `-p person zone ...")
+                    help="Enable privacy filter. `-p` gives a sensible default, otherwise use `-p person zone ...` to "
+                         "specify whitelist -- any other entities NOT in the filter will have their name replaced.")
 # TODO: Add output filename
-# TODO: Add privacy filter option to command line
 cs = RESTSource(parser)
 logging.basicConfig(level=cs.args.debug, format='%(levelname)s: %(message)s')
 
@@ -62,7 +62,7 @@ elif len(cs.args.privacy) == 0:  # Just -p
     # Identifier for devices in your system:
     privacy_filter.add("device")
     # Useful components that we usually want exported that are not part of home-assistant's core:
-    for p in {"climate", "input_datetime", "sun", "time"}:
+    for p in {"automation", "climate", "input_datetime", "sun", "time"}:
         privacy_filter.add(p)
     # Common things that you may want to adjust to keep them private and that are not part of the based platforms:
     privacy_filter.discard("device_tracker")  # Anonymize your mobile devices if you use the app.
@@ -162,7 +162,8 @@ def main():
             area = mkLocationURI(MINE, d_area)
             g.add((area, RDF.type, S4BLDG['BuildingSpace']))
             g.add((area, S4BLDG['contains'], d_g))
-            g.add((area, RDFS.label, Literal(area_name)))
+            if privacy_filter is None or "area" in privacy_filter:
+              g.add((area, RDFS.label, Literal(area_name)))
         # END Area
 
         # Handle `via_device` if present.
@@ -232,7 +233,7 @@ def handleAutomation(master, HASS, MINE, a, a_name, g):
     c_trigger = 0
     a_o = MINE["automation/" + mkname(a_name)]
     g.add((a_o, RDF.type, HASS['Automation']))
-    if hc.ATTR_FRIENDLY_NAME in a:
+    if hc.ATTR_FRIENDLY_NAME in a and (privacy_filter is None or "automation" in privacy_filter):
         g.add((a_o, RDFS.label, Literal(a[hc.ATTR_FRIENDLY_NAME])))
     # {'id': '1672829613487', 'alias': 'Floorheating BACK', 'description': '', 'trigger': [{'platform': 'time', 'at': 'input_datetime.floorheating_on'}], 'condition': [], 'action': [{'service': 'climate.set_temperature', 'data': {'temperature': 17}, 'target': {'device_id': 'ec5cb183f030a83754c6f402af08420f'}}], 'mode': 'single'}
     if 'id' not in a:
@@ -563,8 +564,9 @@ def handle_entity(HASS, MINE, SAREF, class_to_saref, device: Optional[str], e, g
     g.add((e_d, RDF.type, c))
     try:
         friendly_name = cs.getAttributes(e)[hc.ATTR_FRIENDLY_NAME]
-        # Bad idea, but...:
-        g.add((e_d, RDFS.label, Literal(friendly_name)))
+        if privacy_filter is None or e_d in privacy_filter:
+            # Bad idea, but...:
+            g.add((e_d, RDFS.label, Literal(friendly_name)))
     except KeyError:
         pass
 
