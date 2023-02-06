@@ -3,4 +3,5 @@ homeassistant~=2022.12.7
 numpy
 PyYAML
 requests
+requests_cache
 rdflib
