@@ -25,4 +25,7 @@ options:
                         Use ForcedIPHTTPSAdapter to override IP for URL; useful on internal IPs.
   -c ca.crt, --certificate ca.crt
                         Path to a CA certificate to validate your https-connection if needed. The string "None" will disable validation.
+$ export TOKEN=zzzaaaxxx...
+$ python hacvt.py https://homeassistant.local:8123/api/ TOKEN
+<lots of RDF output here and in the outputfile>
 ```
