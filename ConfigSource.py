@@ -53,6 +53,11 @@ class RESTSource(ConfigSource):
     def getYAML(self, query):
         http_data = {'template': '{{ ' + query + ' }}'}
         j_response = self.session.post(self.hass_url + "template", json=http_data)
+        if j_response.status_code == 401:
+            # Let's quickly check if the token is valid via GET:
+            self.getStates()
+            assert False, "Your token does not seem to have admin privileges that the tool needs to execute some " \
+                          "queries via templates.\n Please obtain an admin-token and try again."
         assert j_response.status_code == 200, f"YAML request failed: " + str(j_response.text)
         return yaml.safe_load(j_response.text)
 
