@@ -2,7 +2,7 @@
 
 This tool uses the API of a [Home Assistant](https://www.home-assistant.io) installation to export the static structure of your smart home as an RDF ontology file. It exports the devices, their entities and attributes and locations -- not the current sensor values! You can then browse and query the generated ontology, see **Instructions** below.
 
-The current schema for the types provided by Home Assistant is published at https://www.foldr.org/profiles/homeassistant/.
+The current schema for the types provided by Home Assistant is published at https://www.foldr.org/profiles/homeassistant/. It uses the [SAREF Smart Applications REFerence ontology](https://saref.etsi.org/core/).
 
 This project is ongoing work in HVL's "Smart Software Systems (S3)" project. 
 
