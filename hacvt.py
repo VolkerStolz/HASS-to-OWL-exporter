@@ -43,6 +43,8 @@ from ConfigSource import RESTSource
 parser = argparse.ArgumentParser()
 parser.add_argument('-d', '--debug', default='INFO', const='DEBUG', nargs='?',
                       help="Set Python log level. INFO if not set, otherwise DEBUG or your value here is used.")
+parser.add_argument('-n', '--namespace', default='http://my.name.space/',
+                    help="Namespace for your objects in the output. `http://my.name.space/` by default.")
 parser.add_argument('-o', '--out', default='ha.ttl',
                       help="Set output filename; `ha.ttl` by default.")
 parser.add_argument('-p', '--privacy', nargs='*', metavar='platform*',
@@ -744,11 +746,13 @@ def setupSAREF(g, importsOnly=False):
     g.bind("s4bldg", S4BLDG)
     g.bind("hass", HASS)
     g.bind("ha_action", HASS_ACTION)
-    MINE = Namespace("http://my.name.spc/")
-    MINE_ACTION = Namespace("http://my.name.spc/action/")
-    MINE_AUTOMATION = Namespace("http://my.name.spc/automation/")
-    MINE_ENTITY = Namespace("http://my.name.spc/entity/")
-    MINE_SERVICE = Namespace("http://my.name.spc/service/")
+    if not cs.args.namespace.endswith("/"):
+        cs.args.namespace += "/"
+    MINE = Namespace(cs.args.namespace)
+    MINE_ACTION = MINE.term("action/")
+    MINE_AUTOMATION = MINE.term("automation/")
+    MINE_ENTITY = MINE.term("entity/")
+    MINE_SERVICE = MINE.term("service/")
     if importsOnly:
         saref_import = URIRef(str(MINE))
     else:
