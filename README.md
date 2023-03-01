@@ -1,3 +1,14 @@
+# Home-Assistant to OWL Exporter
+
+This tool uses the API of a [Home Assistant](https://www.home-assistant.io) installation to export the static structure of your smart home as an RDF ontology file. It exports the devices, their entities and attributes and locations -- not the current sensor values! You can then browse and query the generated ontology, see **Instructions** below.
+
+The current schema for the types provided by Home Assistant is published at https://www.foldr.org/profiles/homeassistant/.
+
+This project is ongoing work in HVL's "Smart Software Systems (S3)" project. 
+
+Contact: Volker Stolz (HVL).
+Contributions by: [Eduard Kamburjan](https://github.com/Edkamb), [Fernando Macías](https://github.com/femaciasg), [Adam Cheng](https://github.com/adamchengtkc)
+
 # Instructions
 
 0. Ignore the `Makefile`
