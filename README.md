@@ -18,7 +18,7 @@ Contributions by: [Eduard Kamburjan](https://github.com/Edkamb), [Fernando Mací
 
 ```
 $ python hacvt.py -h
-usage: hacvt.py [-h] [-d [DEBUG]] [-o OUT] [-p [platform* ...]] [-m 192.0.2.1] [-c ca.crt] url TOKENVAR
+usage: hacvt.py [-h] [-d [DEBUG]] [-n NAMESPACE] [-o OUT] [-p [platform* ...]] [-m 192.0.2.1] [-c ca.crt] url TOKENVAR
 
 positional arguments:
   url                   Full path to API, e.g. https://homeassistant.local:8123/api/.
@@ -28,6 +28,8 @@ options:
   -h, --help            show this help message and exit
   -d [DEBUG], --debug [DEBUG]
                         Set Python log level. INFO if not set, otherwise DEBUG or your value here is used.
+  -n NAMESPACE, --namespace NAMESPACE
+                        Namespace for your objects in the output. `http://my.name.space/` by default.
   -o OUT, --out OUT     Set output filename; `ha.ttl` by default.
   -p [platform* ...], --privacy [platform* ...]
                         Enable privacy filter. `-p` gives a sensible default, otherwise use `-p person zone ...` to specify whitelist -- any other
