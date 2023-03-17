@@ -1,7 +1,8 @@
 forcediphttpsadapter
-homeassistant~=2022.12.7
+git+https://github.com/VolkerStolz/core@vs-wip-bps#egg=homeassistant
 numpy
 PyYAML
 requests
 requests_cache
 rdflib
+websockets

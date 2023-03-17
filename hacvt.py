@@ -741,11 +741,13 @@ def setupSAREF(g, importsOnly=False):
     S4BLDG = Namespace("https://saref.etsi.org/saref4bldg/")
     HASS = Namespace("https://www.foldr.org/profiles/homeassistant/")
     HASS_ACTION = HASS.term("action/")
+    HASS_BLUEPRINT = HASS.term("blueprint/")
     g.bind("saref", SAREF)
     g.bind("owl", OWL)
     g.bind("s4bldg", S4BLDG)
     g.bind("hass", HASS)
     g.bind("ha_action", HASS_ACTION)
+    g.bind("ha_np", HASS_BLUEPRINT)
     if not cs.args.namespace.endswith("/"):
         cs.args.namespace += "/"
     MINE = Namespace(cs.args.namespace)
@@ -858,6 +860,24 @@ def setupSAREF(g, importsOnly=False):
         g.add((HASS["action/" + k.title()], RDFS.subClassOf, ha_action))
     # END
 
+    # Blueprints
+    h_bp = HASS_BLUEPRINT['blueprint']
+    h_bp_input = HASS_BLUEPRINT['input']
+    h_bp_has_inputs = HASS_BLUEPRINT['hasInputs']
+    g.add((h_bp_has_inputs, RDF.type, OWL.ObjectProperty))
+    g.add((h_bp_has_inputs, RDFS.domain, h_bp))
+    g.add((h_bp_has_inputs, RDFS.range, h_bp_input))
+    h_bp_selector = HASS_BLUEPRINT['selector']
+    h_input_has_selector = HASS_BLUEPRINT['hasSelector']
+    g.add((h_input_has_selector, RDF.type, OWL.ObjectProperty))
+    g.add((h_input_has_selector, RDFS.domain, h_bp_input))
+    g.add((h_input_has_selector, RDFS.range, h_bp_selector))
+    for s in homeassistant.helpers.selector.SELECTORS:
+        print(s)
+    exit(1)
+    g.add((HASS_BLUEPRINT['']))
+
+    # END Blueprints
     tt = HASS["type/TriggerType"]
     prop_has_trigger = HASS['hasTrigger']
     g.add((prop_has_trigger, RDF.type, OWL.ObjectProperty))
