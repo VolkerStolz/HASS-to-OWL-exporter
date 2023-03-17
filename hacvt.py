@@ -117,18 +117,14 @@ def mkLocationURI(MINE, name):
 
 def main():
     g = Graph(bind_namespaces="core")
-    MINE, HASS, SAREF, S4BLDG, class_to_saref = setupSAREF(g, importsOnly=False)
+    MINE, HASS, SAREF, S4BLDG, class_to_saref, master = setupSAREF(g, importsOnly=False)
     # Save metamodel:
     f_out = open("homeassistantcore.rdf", "w")
     print(g.serialize(format='application/rdf+xml'), file=f_out)
     # ... and get us a fresh graph:
     g = Graph(bind_namespaces="core")
-    MINE, HASS, SAREF, S4BLDG, _ = setupSAREF(g, importsOnly=True)
+    MINE, HASS, SAREF, S4BLDG, _, master = setupSAREF(g, importsOnly=True)
     g.add((URIRef(str(MINE)), OWL.imports, URIRef(str(HASS))))
-
-    # Load known types:
-    master = Graph()
-    master.parse("https://saref.etsi.org/core/v3.1.1/saref.ttl")
 
     the_devices = cs.getDevices()
     for d in the_devices:
@@ -643,19 +639,10 @@ def handle_entity(HASS, MINE, SAREF, class_to_saref, device: Optional[str], e, g
         # END
     elif domain == hc.Platform.BINARY_SENSOR or domain == hc.Platform.SENSOR:  # Handle both types in one for now.
         if device_class is not None:
-            # Patch lower-case names:
-            q = device_class.title()
-            # Let's look it up in the SAREF "master-list":
-            q_o = hasEntity(master, SAREF, 'Property', q)
-            # TODO: we don't find the ones that we've already created ourselves,
-            #  even in `g` that way!
-            if q_o is None:
-                # TODO: should search in the same way as `hasEntity` above.
-                # Note: Still injects HASS types into instance (#5)
-                q_o = createPropertyIfMissing(HASS, SAREF, g, q)
+            q_o = createPropertyIfMissing(master, HASS, SAREF, g, device_class.title())
             # ...and instance:
             # TODO: should this be shared, ie. do we want different sensor measuring the same property?
-            q_prop = MINE[f"{q}_prop"]
+            q_prop = MINE[f"{device_class.title()}_prop"]
             g.add((q_prop, RDF.type, q_o))
             g.add((e_d, SAREF['measuresProperty'], q_prop))
         #
@@ -689,7 +676,13 @@ def handle_entity(HASS, MINE, SAREF, class_to_saref, device: Optional[str], e, g
     return e_d
 
 
-def createPropertyIfMissing(HASS, SAREF, g, q):
+def createPropertyIfMissing(master, HASS, SAREF, g, q):
+    # Let's look it up in the SAREF "master-list":
+    q_o = hasEntity(master, SAREF, 'Property', q)
+    # TODO: we don't find the ones that we've already created ourselves,
+    #  even in `g` that way!
+    if not (q_o is None):
+        return q_o
     q_o = HASS[q]
     uri = URIRef("http://home-assistant.io/" + q)
     # TODO: is this worth the effort?
@@ -747,7 +740,7 @@ def setupSAREF(g, importsOnly=False):
     g.bind("s4bldg", S4BLDG)
     g.bind("hass", HASS)
     g.bind("ha_action", HASS_ACTION)
-    g.bind("ha_np", HASS_BLUEPRINT)
+    g.bind("ha_bp", HASS_BLUEPRINT)
     if not cs.args.namespace.endswith("/"):
         cs.args.namespace += "/"
     MINE = Namespace(cs.args.namespace)
@@ -763,8 +756,12 @@ def setupSAREF(g, importsOnly=False):
     g.add((saref_import, OWL.imports, URIRef(str(SAREF))))
     g.add((saref_import, OWL.imports, URIRef(str(S4BLDG))))
 
+    # Load known types:
+    master = Graph()
+    master.parse("https://saref.etsi.org/core/v3.1.1/saref.ttl")
+
     if importsOnly:
-        return MINE, HASS, SAREF, S4BLDG, None
+        return MINE, HASS, SAREF, S4BLDG, None, master
 
     g.bind("mine", MINE)
     g.bind("action", MINE_ACTION)
@@ -777,6 +774,11 @@ def setupSAREF(g, importsOnly=False):
 
     # TODO: light maybe_has brightness?
     g.add((HASS['Brightness'], RDFS.subClassOf, SAREF['Property']))
+    # TODO: Some need alignment with SAREF! #11
+    for p in homeassistant.components.sensor.SensorDeviceClass:
+        createPropertyIfMissing(master, HASS, SAREF, g, p.title())
+    for p in homeassistant.components.binary_sensor.BinarySensorDeviceClass:
+        createPropertyIfMissing(master, HASS, SAREF, g, p.title())
 
     # Inject Service-classes
     # Note that using /api/services only gives you the services of your instance. Here, we want to create
@@ -860,24 +862,6 @@ def setupSAREF(g, importsOnly=False):
         g.add((HASS["action/" + k.title()], RDFS.subClassOf, ha_action))
     # END
 
-    # Blueprints
-    h_bp = HASS_BLUEPRINT['blueprint']
-    h_bp_input = HASS_BLUEPRINT['input']
-    h_bp_has_inputs = HASS_BLUEPRINT['hasInputs']
-    g.add((h_bp_has_inputs, RDF.type, OWL.ObjectProperty))
-    g.add((h_bp_has_inputs, RDFS.domain, h_bp))
-    g.add((h_bp_has_inputs, RDFS.range, h_bp_input))
-    h_bp_selector = HASS_BLUEPRINT['selector']
-    h_input_has_selector = HASS_BLUEPRINT['hasSelector']
-    g.add((h_input_has_selector, RDF.type, OWL.ObjectProperty))
-    g.add((h_input_has_selector, RDFS.domain, h_bp_input))
-    g.add((h_input_has_selector, RDFS.range, h_bp_selector))
-    for s in homeassistant.helpers.selector.SELECTORS:
-        print(s)
-    exit(1)
-    g.add((HASS_BLUEPRINT['']))
-
-    # END Blueprints
     tt = HASS["type/TriggerType"]
     prop_has_trigger = HASS['hasTrigger']
     g.add((prop_has_trigger, RDF.type, OWL.ObjectProperty))
@@ -947,7 +931,7 @@ def setupSAREF(g, importsOnly=False):
     g.add((prop_has_entity, RDFS.range, XSD.boolean))  # long/short
 
     # END
-    return MINE, HASS, SAREF, S4BLDG, class_to_saref
+    return MINE, HASS, SAREF, S4BLDG, class_to_saref, master
 
 
 if __name__ == "__main__":
