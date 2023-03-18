@@ -6,8 +6,10 @@ import re
 import urllib.parse
 import urllib.request
 import requests_cache
-from homeassistant.helpers.blueprint_importer import fetch_blueprint_from_url
-from homeassistant.helpers.blueprints import BLUEPRINT_SCHEMA
+import homeassistant.components.persistent_notification  # break circular import
+from homeassistant.components.blueprint.importer import fetch_blueprint_from_url
+from homeassistant.components.blueprint.schemas import BLUEPRINT_SCHEMA
+from homeassistant.core import HomeAssistant
 
 
 class Input(yaml.YAMLObject):
@@ -48,7 +50,7 @@ GITHUB_FILE_PATTERN = re.compile(
 
 async def test_url(url):
     async with aiohttp.ClientSession() as session:
-        res = await fetch_blueprint_from_url(session, url)
+        res = await fetch_blueprint_from_url(HomeAssistant(), url)
         print(res)
 
 loop = asyncio.get_event_loop()

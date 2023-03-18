@@ -1,5 +1,5 @@
 forcediphttpsadapter
-git+https://github.com/VolkerStolz/core@vs-wip-bps#egg=homeassistant
+homeassistant
 numpy
 PyYAML
 requests
