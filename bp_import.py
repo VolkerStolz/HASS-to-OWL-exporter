@@ -1,8 +1,12 @@
+import asyncio
+
+import aiohttp
 import yaml
 import re
 import urllib.parse
 import urllib.request
 import requests_cache
+from homeassistant.helpers.blueprint_importer import fetch_blueprint_from_url
 from homeassistant.helpers.blueprints import BLUEPRINT_SCHEMA
 
 
@@ -30,6 +34,7 @@ gists = [
 
 my_imports = [
     "https://my.home-assistant.io/redirect/blueprint_import/?blueprint_url=https%3A%2F%2Fgithub.com%2Fgmlupatelli%2Fblueprints_repo%2Fblob%2Fmaster%2Flow_battery_notification%2Flow_battery_notification.yaml"
+    , "https://my.home-assistant.io/redirect/blueprint_import/?blueprint_url=https%3A%2F%2Fcommunity.home-assistant.io%2Ft%2Fzha-ikea-five-button-remote-for-lights%2F253804"
 ]
 
 MY_IMPORT_DECODER = re.compile(
@@ -40,6 +45,15 @@ GITHUB_FILE_PATTERN = re.compile(
     r"^https://github.com/(?P<repository>.+)/blob/(?P<path>.+)$"
 )
 
+
+async def test_url(url):
+    async with aiohttp.ClientSession() as session:
+        res = await fetch_blueprint_from_url(session, url)
+        print(res)
+
+loop = asyncio.get_event_loop()
+loop.run_until_complete(test_url("https://community.home-assistant.io/t/zha-ikea-five-button-remote-for-lights/253804"))
+
 for m in my_imports:
     try:
         url = MY_IMPORT_DECODER.match(urllib.parse.unquote(m)).group(1)
@@ -47,6 +61,7 @@ for m in my_imports:
         repo, path = match.groups()
         gists.append(f"https://raw.githubusercontent.com/{repo}/{path}")
     except:
+        print("Failed :", url)
         pass  # error
 
 
