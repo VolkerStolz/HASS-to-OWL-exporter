@@ -5,4 +5,4 @@ PyYAML
 requests
 requests_cache
 rdflib
-websockets
+websocket-client

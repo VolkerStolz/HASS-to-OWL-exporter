@@ -125,14 +125,16 @@ class RESTSource(ConfigSource):
                 s = ctx.wrap_socket(s, server_hostname=urlp.hostname)
             ws.connect(ws_url, socket=s, header=header)
         else:
-            if self.args.certificate is not None:
+            if not (self.args.certificate is None):
                 if self.session.verify is None:
                     sslopt = {"cert_reqs": ssl.CERT_NONE}
                 else:
                     sslopt = {"ca_cert": self.session.cert}
             else:
                 sslopt = {}
-            ws.connect(ws_url, sslopt=sslopt, header=header)
+            # Create a new connection because `connect` won't actually `sslopt` otherwise.
+            ws = websocket.WebSocket(sslopt=sslopt)
+            ws.connect(ws_url, header=header)
         welcome_msg = ws.recv()  # Consume hello-msg
         assert welcome_msg.startswith('{"type":"auth_required"'), welcome_msg
         q = {'type': "auth", 'access_token': self.token}
