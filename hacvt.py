@@ -370,6 +370,7 @@ def handleAutomation(master, HASS, MINE, a, a_name, g):
         # `action`s are governed by: https://github.com/home-assistant/core/blob/31a787558fd312331b55e5c2c4b33341fc3601fc/homeassistant/helpers/script.py#L270
         # After that it's following the `_SCHEMA`
     for a_trigger in a_config['trigger']:
+        # https://www.home-assistant.io/docs/automation/trigger/
         for t in cv.TRIGGER_SCHEMA(a_trigger):
             # Only `platform` is mandatory.
             c_trigger = c_trigger + 1
@@ -380,43 +381,35 @@ def handleAutomation(master, HASS, MINE, a, a_name, g):
                     logging.info(f"Found custom platform `{t[cv.CONF_PLATFORM]}`")
 
             o_trigger = MINE["trigger/" + a_name + str(c_trigger)]
+            o_platform = HASS["platform/" + t[cv.CONF_PLATFORM].title()]
+            o_platform_i = MINE[t[cv.CONF_PLATFORM].title()+"_platform"]
+            g.add((o_platform_i, HASS["providesTrigger"], o_trigger))
+            g.add((o_platform_i, RDF.type, o_platform))
+            g.add((o_platform, RDFS.subClassOf, HASS['platform/Platform']))
 
-            e_id = t['entity_id'] if 'entity_id' in t else None
-            if e_id is not None:
-                # This can actually be a list.
+            e_ids = t['entity_id'] if 'entity_id' in t else None
+            if e_ids is not None:
+                # https://www.home-assistant.io/docs/automation/trigger/#multiple-entity-ids-for-the-same-trigger
                 # TODO: isn't there a schema that should list this for us?
-                if isinstance(e_id, list):
-                    assert len(e_id) > 0
-                    if len(e_id) > 1:
-                        logging.critical("Found a trigger with multiple entities. Cowardly refusing to process anything but the first.")
-                    e_id = e_id[0]
-                trigger_entity, _ = mkEntityURI(MINE, e_id)
-                g.add((o_trigger, HASS['trigger_entity'], trigger_entity))
+                if isinstance(e_ids, list):
+                    assert len(e_ids) > 0
+                else:
+                    e_ids = [e_ids]
+                for e_id in e_ids:
+                    trigger_entity, _ = mkEntityURI(MINE, e_id)
+                    g.add((o_trigger, HASS['trigger_entity'], trigger_entity))
 
             # Still a bit unclear here. An Action Trigger schema is very general,
             #  whereas the concrete schemas like binary_sensor/device_trigger.py prescribe more elements,
             #  most importantly `entity_id`
             if t[cv.CONF_PLATFORM] == "device":
-                trigger_device = mkDevice(MINE, t['device_id'])
+                trigger_device = mkDevice(MINE, t[hc.CONF_DEVICE_ID])
                 g.add((o_trigger, HASS['device'], trigger_device))
-                trigger_type = HASS["type/" + t['type']]  # TODO: static? May not be possible/effective,
+                # We just pick up anything via reflection here without looking into it.
+                trigger_type = HASS["type/" + t[hc.CONF_TYPE].title()]  # TODO: static? May not be possible/effective,
                 # ...since there's no global super-container? This must be INSIDE Homeassistant! #5
                 # What I don't know is if the triggers etc. are installed even though you're not using the integration...
                 g.add((trigger_type, RDFS.subClassOf, HASS["type/TriggerType"]))
-                # Does this code below does scale? Of course we could enumerate all Sensor/BinarySensor types.
-                if t[hc.CONF_TYPE] == CONF_MOTION or t[hc.CONF_TYPE] == CONF_NO_MOTION:
-                    attrs = cs.getAttributes(e_id)
-                    d_class = attrs['device_class'] if 'device_class' in attrs else None
-                    # assert d_class == BinarySensorDeviceClass.MOTION, d_class  # Not all code seems to respect this?
-                    # We've already added the entity, but also add the device:
-                    # TODO: solves this a bit higher up in general?
-                    g.add((o_trigger, HASS['trigger_device'], trigger_device))
-                elif t[hc.CONF_TYPE] == "remote_button_short_press" or t['type'] == "remote_button_long_press":
-                    # This is coming from deconz, and fat chance that we will be transcribing all of this by hand!
-                    g.add((o_trigger, HASS['device'], trigger_device))
-                else:
-                    logging.warning(f"not handling trigger {t} yet.")
-                    pass
                 g.add((o_trigger, RDF.type, trigger_type))
             elif t[cv.CONF_PLATFORM] == zone.const.DOMAIN:
                 e_id = t[hc.CONF_ENTITY_ID]  # already done
@@ -466,9 +459,11 @@ def handleAutomation(master, HASS, MINE, a, a_name, g):
                 mkDirectAttribute(HASS, mqtt.device_trigger.CONF_TOPIC, g, o_trigger, t)
             else:
                 logging.warning(f"not handling trigger platform {t[cv.CONF_PLATFORM]}: {t}.")
+                g.add((o_trigger, RDF.type, HASS[f"trigger/{t[cv.CONF_PLATFORM].title()}"]))
+                g.add((HASS[f"trigger/{t[cv.CONF_PLATFORM].title()}"], RDFS.subClassOf, HASS['type/TriggerType']))
                 continue
             # TODO: investigate warning on line below
-            g.add((o_action_instance, HASS['hasTrigger'], o_trigger))
+            g.add((a_o, HASS['hasTrigger'], o_trigger))
 
     for a_condition in a_config['condition']:
         for c in cv.CONDITION_SCHEMA(a_condition):
@@ -862,10 +857,44 @@ def setupSAREF(g, importsOnly=False):
         g.add((HASS["action/" + k.title()], RDFS.subClassOf, ha_action))
     # END
 
+    # Blueprints
+    # Consider if we want this here in the HA-MM...
+    h_bp = HASS['blueprint/Blueprint']
+    h_bp_input = HASS['blueprint/Input']
+    h_bp_has_inputs = HASS['blueprint/hasInputs']
+    g.add((h_bp_has_inputs, RDF.type, OWL.ObjectProperty))
+    g.add((h_bp_has_inputs, RDFS.domain, h_bp))
+    g.add((h_bp_has_inputs, RDFS.range, h_bp_input))
+    h_bp_selector = HASS['blueprint/Selector']
+    h_input_has_selector = HASS['blueprint/hasSelector']
+    g.add((h_input_has_selector, RDF.type, OWL.ObjectProperty))
+    g.add((h_input_has_selector, RDFS.domain, h_bp_input))
+    g.add((h_input_has_selector, RDFS.range, h_bp_selector))
+    for s in homeassistant.helpers.selector.SELECTORS:
+        g.add((HASS['blueprint/'+s.title()], RDFS.subClassOf, h_bp_selector))
+
+    bp_e = HASS['blueprint/Selector_Entity']  # ENTITY_FILTER_SELECTOR_CONFIG_SCHEMA
+    # TODO: turn strings into references?
+    prop_has_entity = HASS['blueprint/Selector_Entity_Integration']
+    g.add((prop_has_entity, RDF.type, OWL.DatatypeProperty))
+    g.add((prop_has_entity, RDFS.domain, bp_e))
+    g.add((prop_has_entity, RDFS.range, XSD.string))  # TODO: just one
+    prop_has_entity = HASS['blueprint/Selector_Entity_Domain']
+    g.add((prop_has_entity, RDF.type, OWL.DatatypeProperty))
+    g.add((prop_has_entity, RDFS.domain, bp_e))
+    g.add((prop_has_entity, RDFS.range, HASS['platform/Platform']))  # Many
+    prop_has_entity = HASS['blueprint/Selector_Entity_DeviceClass']  # TODO: Didn't model those yet?
+    g.add((prop_has_entity, RDF.type, OWL.DatatypeProperty))
+    g.add((prop_has_entity, RDFS.domain, bp_e))
+    g.add((prop_has_entity, RDFS.range, XSD.string))  # Many
+
+    # exit(1)
+    # END Blueprints
+
     tt = HASS["type/TriggerType"]
     prop_has_trigger = HASS['hasTrigger']
     g.add((prop_has_trigger, RDF.type, OWL.ObjectProperty))
-    g.add((prop_has_trigger, RDFS.domain, HASS['action/Action']))
+    g.add((prop_has_trigger, RDFS.domain, HASS['Automation']))
     g.add((prop_has_trigger, RDFS.range, tt))
 
     prop_has_entity = HASS['trigger_entity']
@@ -904,6 +933,10 @@ def setupSAREF(g, importsOnly=False):
     # Model platforms -- unclear if we'll really need this in the future,
     #  but useful for i) a complete metamodel ii) for cross-referencing.
     ha_platform = HASS['platform/Platform']
+    h_platform_provides_triggers = HASS["providesTrigger"]
+    g.add((h_platform_provides_triggers, RDFS.domain, ha_platform))
+    g.add((h_platform_provides_triggers, RDFS.range, HASS['type/TriggerType']))
+
     h_prov = HASS['provided_by']
     g.add((h_prov, RDF.type, OWL.ObjectProperty))
     g.add((h_prov, OWL.inverseOf, HASS['provides']))
