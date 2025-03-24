@@ -41,3 +41,4 @@ boto3
 botocore
 psutil
 Flask
+WTForms

@@ -1,0 +1,14 @@
+{% extends 'base.html' %}
+
+{% block content %}
+    <h1>{% block title %} Messages {% endblock %}</h1>
+    <form method="post">
+        <label for="url">Home Assistant URL</label>
+        <br>
+        <input type="text" name="url"
+               placeholder="Message title"
+               value="{{ request.form['url'] }}"></input>
+        <br>
+        <button type="submit">Submit</button>
+    </form>
+{% endblock %}

@@ -1,10 +1,11 @@
 # from oauthlib.oauth2 import MissingTokenError
 from requests_oauthlib import OAuth2Session
-from flask import Flask, redirect, request, session, url_for, g, current_app, jsonify
+from flask import Flask, redirect, request, session, url_for, g, current_app, jsonify, render_template, flash
 from flask.logging import default_handler
 # from flask_indieauth import requires_indieauth
 import logging
 from logging.config import dictConfig
+import urllib.parse
 import os
 
 import hacvt
@@ -14,8 +15,7 @@ flask_port = 5001
 client_id = "http://127.0.0.1:"+str(flask_port)
 
 ha_url = 'https://mh30.foldr.org:8123'
-authorization_base_url = f'https://mh30.foldr.org:8123/auth/authorize?redirect_uri=http://127.0.0.1:{flask_port}/callback'
-token_url = 'https://mh30.foldr.org:8123/auth/token'
+
 
 dictConfig({
     'version': 1,
@@ -35,38 +35,34 @@ dictConfig({
 app = Flask(__name__)
 
 
-@app.route("/")
-def demo():
-    """Step 1: User Authorization.
-
-    Redirect the user/resource owner to the OAuth provider (i.e. Github)
-    using an URL with a few key OAuth parameters.
-    """
-    oa = OAuth2Session(client_id)
-    oa.headers['User-Agent'] = "vs/1.0"
-    authorization_url, state = oa.authorization_url(authorization_base_url)
-    # State is used to prevent CSRF, keep this for later.
-    session['oauth_state'] = state
-    app.logger.info("this")
-    return redirect(authorization_url)
+@app.route("/", methods=['GET', 'POST'])
+def index():
+    if request.method == 'POST':
+        url = request.form['url']
+        if not url:
+            flash('URL is required!')
+        else:
+            oa = OAuth2Session(client_id)
+            oa.headers['User-Agent'] = "vs/1.0"
+            authorization_base_url = urllib.parse.urljoin(url, f'/auth/authorize?redirect_uri={client_id}/callback')
+            authorization_url, state = oa.authorization_url(authorization_base_url)
+            # State is used to prevent CSRF, keep this for later.
+            session['oauth_state'] = state
+            session['url'] = url
+            return redirect(authorization_url)
+    return render_template('index.html')
 
 
 @app.route("/callback", methods=["GET"])
 def callback():
-    """ Step 3: Retrieving an access token.
-
-    The user has been redirected back from the provider to your registered
-    callback URL. With this redirection comes an authorization code included
-    in the redirect URL. We will use that to obtain an access token.
-    """
-
     oa = OAuth2Session(client_id, state=session['oauth_state'])
     oa.headers['User-Agent'] = "vs/1.0"
     ha_code = request.args.get('code')
     app.logger.warning(ha_code)
     app.logger.warning(request.args)
     # token = oa.token_from_fragment(authorization_response=request.url, code=ha_code)
-    token = oa.fetch_token(token_url, authorization_response=request.url, code=ha_code, include_client_id=True )
+    token_url = urllib.parse.urljoin(session['url'], '/auth/token')
+    token = oa.fetch_token(token_url, authorization_response=request.url, code=ha_code, include_client_id=True)
     session['oauth_token'] = token
 
     return redirect(url_for('status'))
@@ -80,14 +76,15 @@ def status():
     cs = ConfigSource(ha_url+"/api/", t['access_token'])
     tool = hacvt.HACVT(cs)
     g = tool.main(cs)
-    return g.serialize(format='turtle')
-    #
-    # oa = OAuth2Session(client_id, token=session['oauth_token'])
-    # oa.headers['User-Agent'] = "vs/1.0"
-    # res = oa.get(ha_url+"/api/error_log")
-    # assert res.status_code == 200
-    # app.logger.debug(res)
-    # return jsonify(res.json())
+    session['ha_data'] = g.serialize(format='turtle')
+
+    # Show data to user if they want us to keep it.
+    return render_template('submit.html')
+
+
+@app.route("/submit", methods=["POST"])
+def submit():
+    app.logger.warning("done")
 
 
 if __name__ == "__main__":

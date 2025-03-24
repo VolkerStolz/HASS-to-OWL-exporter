@@ -1,0 +1,16 @@
+{% extends 'base.html' %}
+
+{% block content %}
+    <h1>{% block title %} Messages {% endblock %}</h1>
+
+    <h2>Your data for: {{ session['url'] }} </h2>
+    <form id="data" method="post" action="submit">
+        <label for="data">Home Assistant Collected Data</label>
+        <br>
+        <button type="submit">Submit!</button>
+    </form>
+
+    <br>
+    <textarea name="data" form="data">{{ session['ha_data'] }}"</textarea>
+
+{% endblock %}
