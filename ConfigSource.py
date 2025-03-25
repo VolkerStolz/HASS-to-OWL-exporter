@@ -170,7 +170,7 @@ class CLISource(ConfigSource):
                             help='Path to a CA certificate to validate your https-connection if needed. The string'
                                  ' "None" will disable validation.')
         args = parser.parse_args()  # TODO: could be more modular in the future
-        self.args = args  # We may need the results outside.
+        self.args = args  # We may need the results outside. XXX Not any more?
         token = os.getenv(args.token)
         if token is None:
             print(f"Aborting: the environment variable for the token that you specified on the command line does not"

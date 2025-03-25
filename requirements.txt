@@ -1,15 +1,15 @@
-forcediphttpsadapter
-homeassistant
+forcediphttpsadapter~=1.1.0
+homeassistant~=2025.1.4
 numpy
-PyYAML
-requests
+PyYAML~=6.0.2
+requests~=2.32.3
 requests_cache
-rdflib
-websocket-client
+rdflib~=7.1.3
+websocket-client~=1.8.0
 
 voluptuous
 PyJWT
-aiohttp
+aiohttp~=3.11.11
 astral
 Jinja2
 httpx
@@ -40,5 +40,7 @@ securetar
 boto3
 botocore
 psutil
-Flask
+Flask~=3.1.0
 WTForms
+requests-cache~=1.2.1
+requests-oauthlib~=2.0.0

@@ -4,11 +4,14 @@
     <h1>{% block title %} Messages {% endblock %}</h1>
     <form method="post">
         <label for="url">Home Assistant URL</label>
-        <br>
-        <input type="text" name="url"
-               placeholder="Message title"
-               value="{{ request.form['url'] }}"></input>
-        <br>
+        <br/>
+        <input type="text" name="url" id="url"
+               placeholder="https://ha.example.com:8123"
+               value="https://mh30.foldr.org:8123/"/>
+        <br/>
+        <input type="checkbox" name="privacy" id="privacy" />
+        <label for="privacy">Enable privacy-filter (server-side)</label>
+        <br/>
         <button type="submit">Submit</button>
     </form>
 {% endblock %}

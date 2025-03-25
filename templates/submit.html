@@ -6,11 +6,11 @@
     <h2>Your data for: {{ session['url'] }} </h2>
     <form id="data" method="post" action="submit">
         <label for="data">Home Assistant Collected Data</label>
-        <br>
-        <button type="submit">Submit!</button>
+        <br/>
+        <button type="submit">Submit this data to our survey!</button>
     </form>
 
-    <br>
-    <textarea name="data" form="data">{{ session['ha_data'] }}"</textarea>
+    <br/>
+    <textarea name="data" form="data" rows="100" cols="80">{{ ha_data }}"</textarea>
 
 {% endblock %}

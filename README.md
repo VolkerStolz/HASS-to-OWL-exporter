@@ -9,7 +9,15 @@ This project is ongoing work in HVL's "Smart Software Systems (S3)" project.
 Contact: Volker Stolz (HVL).
 Contributions by: [Eduard Kamburjan](https://github.com/Edkamb), [Fernando Macías](https://github.com/femaciasg), [Adam Cheng](https://github.com/adamchengtkc)
 
-# Instructions
+# Instructions -- Flask server
+
+1. Set up your favourite Flask env, start server
+2. On the landing page, enter a Home Assistant URL that you want to log in into, and submit.
+3. The web-server will query Home Assistant and render the ontology in the browser _for further processing_. 
+   This can take a while and doesn't have a progress indicator yet.
+4. _tbd/wip_
+
+# Instructions -- commandline tool
 
 0. Ignore the `Makefile`
 1. Set up a `venv` and `pip install -r requirements.txt`
