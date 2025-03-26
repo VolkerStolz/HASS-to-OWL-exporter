@@ -1,0 +1,8 @@
+{% extends 'base.html' %}
+
+{% block content %}
+    <h1>{% block title %} Messages {% endblock %}</h1>
+
+    <p>Thank you for submitting your URL. Your task id is: <a href="task/{{rid}}">{{ rid }}</a>.
+    Please follow the link to fetch your results.</p>
+{% endblock %}

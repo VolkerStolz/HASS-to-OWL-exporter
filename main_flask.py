@@ -1,7 +1,10 @@
 # from oauthlib.oauth2 import MissingTokenError
 import argparse
+
+from celery import shared_task, Celery, Task
+from celery.result import AsyncResult
 from requests_oauthlib import OAuth2Session
-from flask import Flask, redirect, request, session, url_for, render_template, flash
+from flask import Flask, redirect, request, session, url_for, render_template, flash, Blueprint, current_app
 from flask.logging import default_handler
 # from flask_indieauth import requires_indieauth
 import logging
@@ -28,7 +31,37 @@ dictConfig({
         'handlers': ['wsgi']
     }
 })
-app = Flask(__name__)
+
+def celery_init_app(app: Flask) -> Celery:
+    class FlaskTask(Task):
+        def __call__(self, *args: object, **kwargs: object) -> object:
+            with app.app_context():
+                return self.run(*args, **kwargs)
+
+    celery_app = Celery(app.name, task_cls=FlaskTask)
+    celery_app.config_from_object(app.config["CELERY"])
+    celery_app.set_default()
+    app.extensions["celery"] = celery_app
+    return celery_app
+
+def create_app() -> Flask:
+    myapp = Flask(__name__)
+    myapp.config.from_mapping(
+        CELERY=dict(
+            broker_url="redis://localhost",
+            result_backend="redis://localhost",
+            task_ignore_result=True,
+        ),
+    )
+    celery_app = celery_init_app(myapp)
+    myapp.register_blueprint(app)
+    myapp.secret_key = os.urandom(24)
+    # os.environ['OAUTHLIB_INSECURE_TRANSPORT'] = '1'
+    myapp.logger.setLevel(logging.DEBUG)
+    return myapp
+
+
+app = Blueprint('app', __name__, template_folder='templates')
 
 
 @app.route("/", methods=['GET', 'POST'])
@@ -68,7 +101,16 @@ def callback():
     session['oauth_token'] = token
 
     # TODO: why redirect, why not inline...
-    return redirect(url_for('status'))
+    return redirect(url_for('app.status'))
+
+
+@shared_task(ignore_result=False)
+def traverse_ha(url, token, privacy_option):
+    cs = ConfigSource(url, token)
+    tool = hacvt.HACVT(cs)
+    g = tool.main(cs, privacy=privacy_option)
+    ha_data = g.serialize(format='turtle')
+    return ha_data
 
 
 @app.route("/status", methods=["GET"])
@@ -78,28 +120,32 @@ def status():
     privacy_option = session['privacy']
     # We yolo and hope that we finish before expiry.
     api_url = urllib.parse.urljoin(session['url'], '/api/')
-    cs = ConfigSource(api_url, t['access_token'])
-    tool = hacvt.HACVT(cs)
-    # Bad UX since we'll get stuck here.
+    result = traverse_ha.delay(api_url, t['access_token'], privacy_option)
     # TODO: Use some kind of progress indicator and send this in the background.
-    g = tool.main(cs, privacy=privacy_option)
     # used in template
-    ha_data = g.serialize(format='turtle')
 
     # Show data to user if they want us to keep it.
-    return render_template('submit.html', ha_data=ha_data)
+    return render_template('processing.html', rid=result.id)
 
+
+@app.route('/task/<rid>')
+def task(rid):
+    result = AsyncResult(rid)
+    if result.ready():
+        data = result.result
+        result.forget()
+        return render_template('submit.html', ha_data=data)
+    else:
+        return "not ready :-( Just hit reload... Or are you looking at an old task from long ago that has already expired?"
 
 @app.route("/submit", methods=["POST"])
 def submit():
-    app.logger.warning("done")
+    current_app.logger.warning("done")
     # TODO
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     args = parser.parse_args()
-    app.secret_key = os.urandom(24)
-    # os.environ['OAUTHLIB_INSECURE_TRANSPORT'] = '1'
-    app.logger.setLevel(logging.DEBUG)
+    app = create_app()
     app.run(debug=True)
