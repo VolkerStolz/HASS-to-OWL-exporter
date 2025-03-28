@@ -1,5 +1,7 @@
 # from oauthlib.oauth2 import MissingTokenError
 import argparse
+import sqlite3
+from sqlite3 import OperationalError
 
 from celery import shared_task, Celery, Task
 from celery.result import AsyncResult
@@ -45,11 +47,14 @@ def celery_init_app(app: Flask) -> Celery:
     return celery_app
 
 def create_app() -> Flask:
+    assert "BROKER_URL" in os.environ
+    assert "RESULT_BACKEND" in os.environ
     myapp = Flask(__name__)
     myapp.config.from_mapping(
         CELERY=dict(
-            broker_url="redis://localhost",
-            result_backend="redis://localhost",
+            # VS: set this on the command line!
+            broker_url=os.environ["BROKER_URL"],
+            result_backend=os.environ["RESULT_BACKEND"],
             task_ignore_result=True,
         ),
     )
@@ -93,8 +98,8 @@ def callback():
     oa = OAuth2Session(client_id, state=session['oauth_state'])
     oa.headers['User-Agent'] = "vs/1.0"
     ha_code = request.args.get('code')
-    app.logger.warning(ha_code)
-    app.logger.warning(request.args)
+    current_app.logger.warning(ha_code)
+    current_app.logger.warning(request.args)
     # token = oa.token_from_fragment(authorization_response=request.url, code=ha_code)
     token_url = urllib.parse.urljoin(session['url'], '/auth/token')
     token = oa.fetch_token(token_url, authorization_response=request.url, code=ha_code, include_client_id=True)
@@ -136,12 +141,17 @@ def task(rid):
         result.forget()
         return render_template('submit.html', ha_data=data)
     else:
-        return "not ready :-( Just hit reload... Or are you looking at an old task from long ago that has already expired?"
+        return "<html><body><p>not ready :-( Just hit reload... Or are you looking at an old task from long ago that has already expired?</p></body></html>"
 
 @app.route("/submit", methods=["POST"])
 def submit():
-    current_app.logger.warning("done")
-    # TODO
+    conn = sqlite3.connect("hacvt.db")
+    conn.row_factory = sqlite3.Row
+    conn.execute("CREATE TABLE IF NOT EXISTS data (datetime, url TEXT NOT NULL, privacy, data TEXT)")
+    conn.execute("INSERT INTO data VALUES(datetime('now'),?,?,?)", (session['url'], session['privacy'], request.form['data']))
+    conn.commit()
+    conn.close()
+    return "Thank you!"
 
 
 if __name__ == "__main__":

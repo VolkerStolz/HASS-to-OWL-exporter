@@ -8,11 +8,17 @@
 <body>
     <nav>
         <a href="{{ url_for('app.index') }}">FlaskApp</a>
-        <a href="#">About</a>
+        <a href="#about">About</a>
     </nav>
     <hr>
     <div class="content">
         {% block content %} {% endblock %}
+    </div>
+    <hr/>
+    <div a="about">
+        <h2>About</h2>
+        <p>Github: <a href="https://github.com/VolkerStolz/HASS-to-OWL-exporter/">https://github.com/VolkerStolz/HASS-to-OWL-exporter/</a><br/>
+            Author: <a href="https://selabhvl.github.io/vsto/">Volker Stolz</a></p>
     </div>
 </body>
 </html>

@@ -1,17 +1,42 @@
 {% extends 'base.html' %}
 
 {% block content %}
-    <h1>{% block title %} Messages {% endblock %}</h1>
+    <h1>{% block title %} Home Assistant Configuration Exporter {% endblock %}</h1>
+
+    <p>
+        When you authorize your Home Assistant installation below,
+        we'll connect to your API and export all your devices,
+        automations etc. in RDF according to the Smart Applications REFerence ontology (<a href="https://saref.etsi.org/core/v3.2.1/">SAREF</a>).
+    </p>
+    <p>The URL must be reachable from the internet and include the port-number where necessary, <kbd>http://homeassistant.local</kbd> or an
+        internal IP address such as <kbd>192.168.1.1</kbd> will not work.</p>
+    <p>
+        This export does not contain any passwords or other sensitive data,
+        it is just a snapshot of your static configuration of your smarthome.
+        However, your device names may become exposed (even with the privacy filter enabled below).
+    </p>
+    <p>We do not add your data to our database unless you confirm your submission after we've shown
+        you the output that we scraped. Note that your data and OAuth token will remain in the web-server cache for some time until
+        the cache expires it automatically. However, it is only accessible by the web-server administrator,
+        not from the outside.
+    </p>
+    <div style="background-color: lightgrey; display: inline-block; padding: 10px 10px 10px 10px;">
     <form method="post">
-        <label for="url">Home Assistant URL</label>
-        <br/>
-        <input type="text" name="url" id="url"
+        <label for="url">Your Home Assistant URL:</label>
+        &nbsp;
+        <input type="text" name="url" id="url" size="40"
                placeholder="https://ha.example.com:8123"
                value="https://mh30.foldr.org:8123/"/>
         <br/>
         <input type="checkbox" name="privacy" id="privacy" />
-        <label for="privacy">Enable privacy-filter (server-side)</label>
+        <label for="privacy">Enable privacy-filter (server-side). This will remove the names of devices and rooms.</label>
         <br/>
-        <button type="submit">Submit</button>
+        <button type="submit">Start exporting my Home Assistant smarthome structure!</button>
     </form>
+    </div>
+    <p>
+        Note that this process may take a while (it takes slightly longer than 30s for my home setup).
+        Just reload the status page every few seconds until I get around to add some kind of progress indicator.
+        You can then save the resulting RDF and import it e.g. into <a href="https://protege.stanford.edu">Protégé</a>.
+    </p>
 {% endblock %}

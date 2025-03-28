@@ -48,3 +48,6 @@ async-timeout
 url-normalize
 celery
 redis
+pylint
+astroid
+sqlite3
