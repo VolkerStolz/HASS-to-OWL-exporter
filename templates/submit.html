@@ -4,6 +4,10 @@
     <h1>{% block title %} Messages {% endblock %}</h1>
 
     <h2>Your data for: {{ session['url'] }} </h2>
+
+    <p>Note that your data is now deleted from the backend (so you can't reload/open this page here later),
+        and you have to decide to submit the data here now.</p>
+
     <form id="data" method="post" action="submit">
         <label for="data">Home Assistant Collected Data</label>
         <br/>
