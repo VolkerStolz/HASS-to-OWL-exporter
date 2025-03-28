@@ -50,4 +50,3 @@ celery
 redis
 pylint
 astroid
-sqlite3

@@ -6,7 +6,7 @@ from sqlite3 import OperationalError
 from celery import shared_task, Celery, Task
 from celery.result import AsyncResult
 from requests_oauthlib import OAuth2Session
-from flask import Flask, redirect, request, session, url_for, render_template, flash, Blueprint, current_app
+from flask import Flask, redirect, request, session, url_for, render_template, flash, Blueprint, current_app, Response
 from flask.logging import default_handler
 # from flask_indieauth import requires_indieauth
 import logging
@@ -153,6 +153,13 @@ def submit():
     conn.close()
     return "Thank you!"
 
+
+@app.route("/query/<int:id>")
+def query(id):
+    conn = sqlite3.connect("hacvt.db")
+    conn.row_factory = sqlite3.Row
+    res = conn.execute("SELECT data FROM data")
+    return Response(response=res.fetchall()[id], mimetype="text/turtle")
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
