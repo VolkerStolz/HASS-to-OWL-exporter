@@ -5,8 +5,9 @@ from sqlite3 import OperationalError
 
 from celery import shared_task, Celery, Task
 from celery.result import AsyncResult
+from oauthlib.oauth2 import InsecureTransportError
 from requests_oauthlib import OAuth2Session
-from flask import Flask, redirect, request, session, url_for, render_template, flash, Blueprint, current_app, Response
+from flask import Flask, abort, redirect, request, session, url_for, render_template, flash, Blueprint, current_app, Response
 from flask.logging import default_handler
 # from flask_indieauth import requires_indieauth
 import logging
@@ -61,7 +62,8 @@ def create_app() -> Flask:
     celery_app = celery_init_app(myapp)
     myapp.register_blueprint(app)
     myapp.secret_key = os.urandom(24)
-    # os.environ['OAUTHLIB_INSECURE_TRANSPORT'] = '1'
+    os.environ['OAUTHLIB_INSECURE_TRANSPORT'] = '1'
+    # os.environ.pop('OAUTHLIB_INSECURE_TRANSPORT')
     myapp.logger.setLevel(logging.DEBUG)
     return myapp
 
@@ -80,7 +82,10 @@ def index():
             oa = OAuth2Session(client_id)
             oa.headers['User-Agent'] = "vs/1.0"
             authorization_base_url = urllib.parse.urljoin(url, f'/auth/authorize?redirect_uri={client_id}/callback')
-            authorization_url, state = oa.authorization_url(authorization_base_url)
+            try:
+                authorization_url, state = oa.authorization_url(authorization_base_url)
+            except InsecureTransportError:
+                abort(404, description="You must use an HTTPS-URL here for now, not HTTP.")
             # State is used to prevent CSRF, keep this for later.
             session['oauth_state'] = state
             session['url'] = url
