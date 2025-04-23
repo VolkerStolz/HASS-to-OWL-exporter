@@ -100,11 +100,11 @@ def index():
 @app.route("/callback", methods=["GET"])
 def callback():
     client_id = request.url_root
+    if 'oauth_state' not in session:
+        abort(400, description="This should not have happened. Maybe a timeout?")
     oa = OAuth2Session(client_id, state=session['oauth_state'])
     oa.headers['User-Agent'] = "vs/1.0"
     ha_code = request.args.get('code')
-    current_app.logger.warning(ha_code)
-    current_app.logger.warning(request.args)
     # token = oa.token_from_fragment(authorization_response=request.url, code=ha_code)
     token_url = urllib.parse.urljoin(session['url'], '/auth/token')
     token = oa.fetch_token(token_url, authorization_response=request.url, code=ha_code, include_client_id=True)
