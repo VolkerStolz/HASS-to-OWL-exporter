@@ -7,6 +7,7 @@ from celery import shared_task, Celery, Task
 from celery.result import AsyncResult
 from oauthlib.oauth2 import InsecureTransportError
 from requests_oauthlib import OAuth2Session
+from requests.exceptions import ConnectTimeout
 from flask import Flask, abort, redirect, request, session, url_for, render_template, flash, Blueprint, current_app, Response
 from flask.logging import default_handler
 # from flask_indieauth import requires_indieauth
@@ -110,12 +111,13 @@ def callback():
     ha_code = request.args.get('code')
     # token = oa.token_from_fragment(authorization_response=request.url, code=ha_code)
     token_url = urllib.parse.urljoin(session['url'], '/auth/token')
-    token = oa.fetch_token(token_url, authorization_response=request.url, code=ha_code, include_client_id=True, timeout=15)
-    if token is None:
-        abort(400, description="Something went wrong. Maybe the server can't reach your server due to e.g. a firewall.")
+    try:
+        token = oa.fetch_token(token_url, authorization_response=request.url, code=ha_code, include_client_id=True, timeout=15)
+    except ConnectTimeout:
+        abort(400, description="Something went wrong after OAuth. Maybe the server can't reach your server due to e.g. a firewall.")
     session['oauth_token'] = token
 
-    # TODO: why redirect, why not inline...
+    # Send user to status page:
     return redirect(url_for('app.status'))
 
 
