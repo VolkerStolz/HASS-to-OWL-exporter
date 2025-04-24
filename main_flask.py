@@ -79,9 +79,10 @@ def index():
             flash('URL is required!')
         else:
             client_id = request.url_root
+            assert client_id.endswith('/')
             oa = OAuth2Session(client_id)
             oa.headers['User-Agent'] = "vs/1.0"
-            authorization_base_url = urllib.parse.urljoin(url, f'/auth/authorize?redirect_uri={client_id}/callback')
+            authorization_base_url = urllib.parse.urljoin(url, f'/auth/authorize?redirect_uri={client_id}callback')
             try:
                 authorization_url, state = oa.authorization_url(authorization_base_url)
             except InsecureTransportError:
@@ -101,13 +102,17 @@ def index():
 def callback():
     client_id = request.url_root
     if 'oauth_state' not in session:
-        abort(400, description="This should not have happened. Maybe a timeout?")
+        # technically with the fetch-timeout below, we might not be seeing this error anymore?
+        abort(400, description="This should not have happened. Maybe a timeout? This can happen if our server "
+        "can't reach your server due to e.g. a firewall.")
     oa = OAuth2Session(client_id, state=session['oauth_state'])
     oa.headers['User-Agent'] = "vs/1.0"
     ha_code = request.args.get('code')
     # token = oa.token_from_fragment(authorization_response=request.url, code=ha_code)
     token_url = urllib.parse.urljoin(session['url'], '/auth/token')
-    token = oa.fetch_token(token_url, authorization_response=request.url, code=ha_code, include_client_id=True)
+    token = oa.fetch_token(token_url, authorization_response=request.url, code=ha_code, include_client_id=True, timeout=15)
+    if token is None:
+        abort(400, description="Something went wrong. Maybe the server can't reach your server due to e.g. a firewall.")
     session['oauth_token'] = token
 
     # TODO: why redirect, why not inline...
