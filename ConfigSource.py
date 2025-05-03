@@ -29,6 +29,7 @@ class ConfigSource:
 
     def __init__(self, url, token):
         self.hass_url = url
+        self.ha_version = None
         self.token = token
         self.session.headers = {'Content-type': 'application/json',
                                 'Authorization': 'Bearer ' + token,
@@ -41,7 +42,7 @@ class ConfigSource:
         if j_response.status_code == 401:
             # Let's quickly check if the token is valid via GET:
             self.getStates()
-            raise HAException("Your token does not seem to have admin privileges that the tool needs to execute some " \
+            raise HAException("Your token does not seem to have admin privileges that the tool needs to execute some "
                           "queries via templates.\n Please obtain an admin-token and try again.")
         assert j_response.status_code == 200, f"YAML request failed: " + str(j_response.text)
         return yaml.safe_load(j_response.text)
@@ -112,6 +113,9 @@ class ConfigSource:
             ws.connect(ws_url, header=header)
         welcome_msg = ws.recv()  # Consume hello-msg
         assert welcome_msg.startswith('{"type":"auth_required"'), welcome_msg
+        welcome_json = json.loads(welcome_msg)
+        self.ha_version = welcome_json.get('ha_version', None)
+        logger.info(f'HA version: {self.ha_version}')
         q = {'type': "auth", 'access_token': self.token}
         ws.send(json.dumps(q))
         auth_result = json.loads(ws.recv())
@@ -175,7 +179,7 @@ class CLISource(ConfigSource):
         if token is None:
             print(f"Aborting: the environment variable for the token that you specified on the command line does not"
                   f" seem to be set!", file=sys.stderr)
-            exit(1)
+            sys.exit(1)
         super().__init__(args.url, token)
         # Set on-demand.
         if args.mount is not None:
