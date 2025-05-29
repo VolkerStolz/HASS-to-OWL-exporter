@@ -32,7 +32,7 @@ Contributions by: [Eduard Kamburjan](https://github.com/Edkamb), [Fernando Mací
 
 ```
 $ python hacvt.py -h
-usage: hacvt.py [-h] [-d [DEBUG]] [-n NAMESPACE] [-o OUT] [-p [platform* ...]] [-m 192.0.2.1] [-c ca.crt] url TOKENVAR
+usage: hacvt.py [-h] [-d [DEBUG]] [-n NAMESPACE] [-o OUT] [-p [platform* ...]] [--rdf RDF] [-m 192.0.2.1] [-c ca.crt] url TOKENVAR
 
 positional arguments:
   url                   Full path to API, e.g. https://homeassistant.local:8123/api/.
@@ -46,8 +46,9 @@ options:
                         Namespace for your objects in the output. `http://my.name.space/` by default.
   -o OUT, --out OUT     Set output filename; `ha.ttl` by default.
   -p [platform* ...], --privacy [platform* ...]
-                        Enable privacy filter. `-p` gives a sensible default, otherwise use `-p person zone ...` to specify whitelist -- any other
-                        entities NOT in the filter will have their name replaced.
+                        Enable privacy filter. `-p` gives a sensible default, otherwise use `-p person zone ...` to specify whitelist -- any other entities NOT in the filter
+                        will have their name replaced.
+  --rdf RDF             Export metamodel into this file and exit.
   -m 192.0.2.1, --mount 192.0.2.1
                         Use ForcedIPHTTPSAdapter to override IP for URL; useful on internal IPs.
   -c ca.crt, --certificate ca.crt
@@ -56,3 +57,8 @@ $ export TOKEN=zzzaaaxxx...
 $ python hacvt.py https://homeassistant.local:8123/api/ TOKEN
 <lots of RDF output here and in the outputfile>
 ```
+
+# Instructions -- update the metamodel
+
+The metamodel is currently published at `https://www.foldr.org/profiles/homeassistant/v1.0/`.
+It has been generated via `--rdf` against Home Assistant 2024.11.3.

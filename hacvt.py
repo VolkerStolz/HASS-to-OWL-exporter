@@ -1,4 +1,5 @@
 import argparse
+import sys
 
 import homeassistant.const as hc
 import homeassistant.core as ha
@@ -38,7 +39,7 @@ from rdflib import Literal, Graph, URIRef
 from rdflib.namespace import Namespace, RDF, RDFS, OWL, XSD
 from typing import Optional
 
-from ConfigSource import CLISource
+from ConfigSource import CLISource, ConfigSource
 
 
 class PrivacyFilter:
@@ -119,6 +120,16 @@ class HACVT:
     def __init__(self, cs):
         self.cs = cs
 
+    def writeMetaModel(self, filename):
+        g = Graph(bind_namespaces="core")
+        _, HASS, _, _, _ , _ = self.setupSAREF(g,
+                                            "unused", # unused
+                                             importsOnly=False)
+        # Save metamodel
+        with open(filename, "w") as f_out:
+            print(g.serialize(format='application/rdf+xml'), file=f_out)
+        return HASS
+
     def main(self, debug=logging.INFO, certificate=None, privacy=None, namespace="http://my.name.space/"):
         logging.basicConfig(level=debug, format='%(levelname)s: %(message)s')
         self.cs.ws = self.cs._ws_connect(certificate=certificate)
@@ -126,14 +137,11 @@ class HACVT:
 
         pf = PrivacyFilter(self.cs)
         pf.privacyFilter_init(privacy=privacy)
-        g = Graph(bind_namespaces="core")
-        MINE, HASS, SAREF, S4BLDG, class_to_saref, master = self.setupSAREF(g, namespace, importsOnly=False)
-        # Save metamodel:
-        f_out = open("homeassistantcore.rdf", "w")
-        print(g.serialize(format='application/rdf+xml'), file=f_out)
+
         # ... and get us a fresh graph:
         g = Graph(bind_namespaces="core")
-        MINE, HASS, SAREF, S4BLDG, _, master = self.setupSAREF(g, namespace, importsOnly=True)
+        MINE, HASS, SAREF, S4BLDG, class_to_saref, master = self.setupSAREF(g, namespace, importsOnly=True)
+        assert class_to_saref is not None
         g.add((URIRef(str(MINE)), OWL.imports, URIRef(str(HASS))))
 
         the_devices = self.cs.getDevices()
@@ -525,6 +533,7 @@ class HACVT:
         return e_service_instance
 
     def handle_entity(self, pf, HASS, MINE, SAREF, class_to_saref, device: Optional[str], e, g, master):
+        assert class_to_saref is not None
         logging.info(f"Handling {e} for device {device}.")
         assert e.count('.') == 1
         (domain, e_name) = ha.split_entity_id(e)
@@ -741,7 +750,7 @@ class HACVT:
     def setupSAREF(self, g, namespace, importsOnly=False):
         SAREF = Namespace("https://saref.etsi.org/core/")
         S4BLDG = Namespace("https://saref.etsi.org/saref4bldg/")
-        HASS = Namespace("https://www.foldr.org/profiles/homeassistant/")
+        HASS = Namespace("https://www.foldr.org/profiles/homeassistant/v1.0/")  # TODO: parametrize version
         HASS_ACTION = HASS.term("action/")
         HASS_BLUEPRINT = HASS.term("blueprint/")
         g.bind("saref", SAREF)
@@ -768,7 +777,7 @@ class HACVT:
         master.parse("https://saref.etsi.org/core/v3.1.1/saref.ttl")
 
         if importsOnly:
-            return MINE, HASS, SAREF, S4BLDG, None, master
+            return MINE, HASS, SAREF, S4BLDG, self.mkClassToSAREF(SAREF), master
 
         g.bind("mine", MINE)
         g.bind("action", MINE_ACTION)
@@ -804,43 +813,7 @@ class HACVT:
             #    g.add((HASS[s], MINE['provided'], HASS[d]))
 
         # Let's patch SAREF a bit with our extensions:
-        # True/False could be replaced by having the HASS-ns on the RHS.
-        class_to_saref = {
-            hc.Platform.AIR_QUALITY: (True, SAREF["Sensor"]),
-            hc.Platform.ALARM_CONTROL_PANEL: (True, SAREF["Device"]),
-            hc.Platform.BINARY_SENSOR: (False, SAREF["Sensor"]),  # Modelling design decisions...
-            hc.Platform.BUTTON: (True, SAREF["Sensor"]),
-            hc.Platform.CALENDAR: None,
-            hc.Platform.CAMERA: (True, SAREF["Device"]),
-            hc.Platform.CLIMATE: (False, SAREF["HVAC"]),
-            hc.Platform.COVER: (True, SAREF["Actuator"]),  # ? saref4bldg:ShadingDevice
-            hc.Platform.DEVICE_TRACKER: (True, SAREF["Sensor"]),
-            hc.Platform.FAN: (True, SAREF["Appliance"]),
-            hc.Platform.GEO_LOCATION: None,
-            hc.Platform.HUMIDIFIER: (True, SAREF["Appliance"]),
-            hc.Platform.IMAGE_PROCESSING: None,
-            hc.Platform.LIGHT: (True, SAREF["Appliance"]),
-            hc.Platform.LOCK: (True, SAREF["Appliance"]),
-            # XXX Deprecated hc.Platform.MAILBOX: None,
-            hc.Platform.MEDIA_PLAYER: (True, SAREF["Appliance"]),
-            hc.Platform.NOTIFY: None,
-            hc.Platform.NUMBER: None,  # SERVICE_SET_VALUE
-            hc.Platform.REMOTE: (True, SAREF["Device"]),
-            hc.Platform.SCENE: None,
-            hc.Platform.SELECT: None,  # SERVICE_SELECT_OPTION
-            hc.Platform.SENSOR: (False, SAREF["Sensor"]),
-            hc.Platform.SIREN: (True, SAREF["Appliance"]),
-            hc.Platform.STT: None,
-            hc.Platform.SWITCH: (False, SAREF["Switch"]),  # Modelling.
-            hc.Platform.TEXT: None,
-            hc.Platform.TTS: None,
-            hc.Platform.UPDATE: None,
-            hc.Platform.VACUUM: (True, SAREF["Appliance"]),
-            hc.Platform.WATER_HEATER: (True, SAREF["Appliance"]),
-            hc.Platform.WEATHER: (True, SAREF["Sensor"]),
-            # Not a `platform`:
-            "device": (False, SAREF["Device"]),  # of course...
-        }
+        class_to_saref = self.mkClassToSAREF(SAREF)
         for p, v in class_to_saref.items():
             if v is not None:
                 flag, superclass = v
@@ -976,7 +949,48 @@ class HACVT:
         g.add((prop_has_entity, RDFS.range, XSD.boolean))  # long/short
 
         # END
+        assert class_to_saref is not None
         return MINE, HASS, SAREF, S4BLDG, class_to_saref, master
+
+    def mkClassToSAREF(self, SAREF):
+        # True/False could be replaced by having the HASS-ns on the RHS.
+        class_to_saref = {
+            hc.Platform.AIR_QUALITY: (True, SAREF["Sensor"]),
+            hc.Platform.ALARM_CONTROL_PANEL: (True, SAREF["Device"]),
+            hc.Platform.BINARY_SENSOR: (False, SAREF["Sensor"]),  # Modelling design decisions...
+            hc.Platform.BUTTON: (True, SAREF["Sensor"]),
+            hc.Platform.CALENDAR: None,
+            hc.Platform.CAMERA: (True, SAREF["Device"]),
+            hc.Platform.CLIMATE: (False, SAREF["HVAC"]),
+            hc.Platform.COVER: (True, SAREF["Actuator"]),  # ? saref4bldg:ShadingDevice
+            hc.Platform.DEVICE_TRACKER: (True, SAREF["Sensor"]),
+            hc.Platform.FAN: (True, SAREF["Appliance"]),
+            hc.Platform.GEO_LOCATION: None,
+            hc.Platform.HUMIDIFIER: (True, SAREF["Appliance"]),
+            hc.Platform.IMAGE_PROCESSING: None,
+            hc.Platform.LIGHT: (True, SAREF["Appliance"]),
+            hc.Platform.LOCK: (True, SAREF["Appliance"]),
+            # XXX Deprecated hc.Platform.MAILBOX: None,
+            hc.Platform.MEDIA_PLAYER: (True, SAREF["Appliance"]),
+            hc.Platform.NOTIFY: None,
+            hc.Platform.NUMBER: None,  # SERVICE_SET_VALUE
+            hc.Platform.REMOTE: (True, SAREF["Device"]),
+            hc.Platform.SCENE: None,
+            hc.Platform.SELECT: None,  # SERVICE_SELECT_OPTION
+            hc.Platform.SENSOR: (False, SAREF["Sensor"]),
+            hc.Platform.SIREN: (True, SAREF["Appliance"]),
+            hc.Platform.STT: None,
+            hc.Platform.SWITCH: (False, SAREF["Switch"]),  # Modelling.
+            hc.Platform.TEXT: None,
+            hc.Platform.TTS: None,
+            hc.Platform.UPDATE: None,
+            hc.Platform.VACUUM: (True, SAREF["Appliance"]),
+            hc.Platform.WATER_HEATER: (True, SAREF["Appliance"]),
+            hc.Platform.WEATHER: (True, SAREF["Sensor"]),
+            # Not a `platform`:
+            "device": (False, SAREF["Device"]),  # of course...
+        }
+        return class_to_saref
 
 
 if __name__ == "__main__":
@@ -990,10 +1004,18 @@ if __name__ == "__main__":
     parser.add_argument('-p', '--privacy', nargs='*', metavar='platform*',
                         help="Enable privacy filter. `-p` gives a sensible default, otherwise use `-p person zone ...` to "
                              "specify whitelist -- any other entities NOT in the filter will have their name replaced.")
+    parser.add_argument('--rdf', nargs=1, help="Export metamodel into this file and exit.")
     # TODO: Add output filename
     cli = CLISource(parser)
     tool = HACVT(cli)
+    if cli.args.rdf is not None:
+        # Requires token & URL since we're fetching services via the API.
+        # TODO: IIRC, we're fetching the services from the API since they depend on the installed plugins.
+        #   Probably we should split this into the ones from the base installation, and patch any others in afterwards.
+        ns = tool.writeMetaModel(cli.args.rdf[0])
+        print(f"Wrote metamodel to {cli.args.rdf[0]}, namespace={ns}", file=sys.stderr)
+        sys.exit(0)
     g = tool.main(debug=cli.args.debug, certificate=cli.args.certificate, privacy=cli.args.privacy, namespace=cli.args.namespace)
-    f_out = open(cli.args.out, "w")
-    print(g.serialize(format='turtle'), file=f_out)
+    with open(cli.args.out, "w") as f_out:
+        print(g.serialize(format='turtle'), file=f_out)
 
